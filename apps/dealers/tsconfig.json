@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "plugins": [{ "name": "next" }],
+    "paths": {
+      "@/*": ["./src/*"],
+      "@carq/ui": ["../../packages/ui/src/index.ts"],
+      "@carq/ui/*": ["../../packages/ui/src/*"],
+      "@carq/api-client": ["../../packages/api-client/src/index.ts"],
+      "@carq/api-client/*": ["../../packages/api-client/src/*"]
+    }
+  },
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
+  "exclude": ["node_modules"]
+}

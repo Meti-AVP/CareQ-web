@@ -1,0 +1,31 @@
+{
+  "name": "carq-web",
+  "private": true,
+  "version": "1.0.0",
+  "description": "CarQ web surfaces — Admin dashboard + Dealers (exhibitions) portal",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:admin": "npm run dev --workspace=@carq/admin",
+    "dev:dealers": "npm run dev --workspace=@carq/dealers",
+    "build": "npm run build --workspace=@carq/admin && npm run build --workspace=@carq/dealers",
+    "build:admin": "npm run build --workspace=@carq/admin",
+    "build:dealers": "npm run build --workspace=@carq/dealers",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/react": "^19.0.7",
+    "@types/react-dom": "^19.0.3",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

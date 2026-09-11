@@ -1,0 +1,201 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/**
+ * CarQ — الأنماط العامة
+ * نفس هوية تطبيق الموبايل: خط Tajawal، خلفية F2F3F7، حبر كحلي.
+ */
+
+:root {
+  --ink: #131a2e;
+  --ink-soft: #1c2540;
+  --ink-border: #2c3757;
+  --bg: #f2f3f7;
+  --surface: #ffffff;
+  --surface-alt: #f9fafc;
+  --line: #e6e8f0;
+  --line-strong: #d6d9e6;
+  --text: #131a2e;
+  --text-sub: #6f7691;
+  --text-faint: #a2a8bc;
+  --accent: #ee4b1e;
+  --accent-soft: #fdede7;
+  --ok: #15803d;
+  --warn: #b45309;
+  --crit: #b3261e;
+  --muted: #6f7691;
+  /*
+   * نفس الألوان كقنوات RGB — كلاسات Tailwind بتقرا منها (tailwind-preset.js)
+   * فالوضع الغامق بيقلب الكروت والنصوص فعلًا، مش خلفية الصفحة بس.
+   * الحبر الكحلي (--c-ink) ثابت في الوضعين: هو الهوية.
+   */
+  --c-ink: 19 26 46;
+  --c-ink-soft: 28 37 64;
+  --c-ink-border: 44 55 87;
+  --c-canvas: 242 243 247;
+  --c-surface: 255 255 255;
+  --c-surface-alt: 249 250 252;
+  --c-line: 230 232 240;
+  --c-line-strong: 214 217 230;
+  --c-content: 19 26 46;
+  --c-content-sub: 111 118 145;
+  --c-content-faint: 162 168 188;
+  --c-accent: 238 75 30;
+  --c-accent-soft: 253 237 231;
+  --c-accent-ink: 42 10 2;
+  --c-ok: 21 128 61;
+  --c-ok-soft: 231 245 236;
+  --c-warn: 180 83 9;
+  --c-warn-soft: 251 240 226;
+  --c-crit: 179 38 30;
+  --c-crit-soft: 248 231 229;
+  --c-muted: 111 118 145;
+  --c-muted-soft: 238 240 246;
+  color-scheme: light;
+}
+
+/**
+ * الوضع الغامق متظبط بالإيد من نفس السلالم — مش قلب تلقائي
+ * (ADMIN_DASHBOARD_SPEC §7). الأسطح بتغمق، والبرتقالي بيفتح شوية
+ * عشان يفضل مقروء على الكحلي.
+ */
+[data-theme='dark'] {
+  --bg: #0e1424;
+  --surface: #161d33;
+  --surface-alt: #1b2340;
+  --line: #2a3350;
+  --line-strong: #38446a;
+  --text: #f2f4fa;
+  --text-sub: #9aa3c0;
+  --text-faint: #6d7796;
+  --accent: #ff6a41;
+  --accent-soft: #33180f;
+  --ok: #3fa568;
+  --warn: #d08a2e;
+  --crit: #d9564c;
+  --c-canvas: 14 20 36;
+  --c-surface: 22 29 51;
+  --c-surface-alt: 27 35 64;
+  --c-line: 42 51 80;
+  --c-line-strong: 56 68 106;
+  --c-content: 242 244 250;
+  --c-content-sub: 154 163 192;
+  --c-content-faint: 109 119 150;
+  --c-accent: 255 106 65;
+  --c-accent-soft: 51 24 15;
+  --c-ok: 63 165 104;
+  --c-ok-soft: 23 51 36;
+  --c-warn: 208 138 46;
+  --c-warn-soft: 58 42 18;
+  --c-crit: 217 86 76;
+  --c-crit-soft: 59 27 26;
+  --c-muted: 154 163 192;
+  --c-muted-soft: 34 43 71;
+  color-scheme: dark;
+}
+
+@layer base {
+  * {
+    border-color: var(--line);
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--bg);
+    color: var(--text);
+    font-family: var(--font-tajawal), Tajawal, system-ui, sans-serif;
+    font-size: 15px;
+    line-height: 24px;
+    font-weight: 500;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /**
+   * الأرقام هندية غربية بفواصل آلاف في كل مكان (ADMIN_DASHBOARD_SPEC §8) —
+   * الأرقام العربية-الهندية بتكسر النسخ واللصق من الجداول.
+   * tabular-nums بتخلي الأعمدة الرقمية متحاذية.
+   */
+  table,
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+
+  ::selection {
+    background: var(--accent);
+    color: #fff;
+  }
+
+  /* سكرول بار هادي بروح التطبيق */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--line-strong);
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--text-faint);
+    background-clip: content-box;
+  }
+
+  /* حلقة تركيز واضحة — إتاحة */
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+}
+
+@layer components {
+  /**
+   * نمط «الرأس الملوّن + الشيت الأبيض» — توقيع التطبيق.
+   * HeaderBlock كحلي بياخد أعلى الصفحة، والشيت الأبيض بيغطي طرفه
+   * بحواف علوية مستديرة (SHEET_OVERLAP = 26 في الموبايل).
+   */
+  .sheet-overlap {
+    margin-top: -26px;
+    border-top-left-radius: 30px;
+    border-top-right-radius: 30px;
+  }
+}
+
+@layer utilities {
+  /** خط الرسم اليدوي بيترسم نفسه — StrokeMotif */
+  .motif-draw {
+    stroke-dasharray: var(--motif-len);
+    stroke-dashoffset: var(--motif-len);
+    animation: motif-draw var(--motif-dur, 1500ms) cubic-bezier(0.37, 0, 0.63, 1)
+      var(--motif-delay, 200ms) forwards;
+  }
+
+  @keyframes motif-draw {
+    to {
+      stroke-dashoffset: 0;
+    }
+  }
+
+  /** بيحترم تفضيل تقليل الحركة في النظام */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+    .motif-draw {
+      stroke-dashoffset: 0;
+    }
+  }
+}
