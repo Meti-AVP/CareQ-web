@@ -12,6 +12,8 @@
  * ماتتغيرش، لأنها بتشوف نفس الأنواع في الحالتين.
  */
 import type {
+  AdminActivityCell,
+  ApplicationStatus,
   Auction,
   AuctionBid,
   AuctionEntry,
@@ -19,6 +21,8 @@ import type {
   AuditEntry,
   BreakdownBucket,
   BreakdownDimension,
+  Catalog,
+  ChatMessage,
   ChatThread,
   DownTier,
   Exhibition,
@@ -34,6 +38,7 @@ import type {
   ScanJob,
   SellNowRequest,
   SignedImageUrl,
+  StatsFilters,
   TimeseriesMetric,
   TimeseriesPoint,
   User,
@@ -58,6 +63,7 @@ const db = {
   scanJobs: [...seed.scanJobs],
   auditLog: [...seed.auditLog],
   chats: [...seed.chats],
+  chatMessages: [...seed.chatMessages],
 };
 
 export type MockDb = typeof db;
@@ -465,6 +471,7 @@ export function placeBid(
   a.currentBid = amount;
   a.nextBid = amount + a.bidStep;
   a.bidsCount += 1;
+  a.topBid = { exhibitionName: ex.name, amount };
 
   // تمديد ضد القنص: آخر ٦٠ ثانية بتمدّ ٦٠ ثانية، بحد أقصى ٢٠ مرة (A-5)
   const remaining = +new Date(a.endsAt) - Date.now();
@@ -650,8 +657,27 @@ function countByStatus<T extends { status: string }>(rows: T[], keys: string[]):
   return out;
 }
 
-export function getOverview(): OverviewStats {
-  const listings = db.listings;
+/**
+ * فلاتر §4.1 — بتفلتر الأرقام المشتقة من الإعلانات.
+ * الباك الحقيقي بيطبّق نفس المنطق على مستوى SQL.
+ */
+const listingMatches = (l: Listing, f: StatsFilters = {}): boolean =>
+  (!f.governorate || l.governorate === f.governorate) && (!f.make || l.make === f.make);
+
+/** مجموعة ids الإعلانات المطابقة — للكيانات اللي بتشاور على إعلان */
+function matchingListingIds(f: StatsFilters = {}): Set<string> | null {
+  if (!f.governorate && !f.make) return null; // مفيش فلتر ⇒ مفيش تقييد
+  return new Set(db.listings.filter((l) => listingMatches(l, f)).map((l) => l.id));
+}
+
+export function getOverview(f: StatsFilters = {}): OverviewStats {
+  const listings = db.listings.filter((l) => listingMatches(l, f));
+  const ids = matchingListingIds(f);
+  const inScope = <T,>(rows: T[], idOf: (r: T) => string): T[] =>
+    ids ? rows.filter((r) => ids.has(idOf(r))) : rows;
+  const sellNowRows = inScope(db.sellNow, (r) => r.listing.id);
+  const auctionRows = inScope(db.auctions, (a) => a.listing.id);
+  const financingRows = inScope(db.financing, (r) => r.listing.id);
   const active = listings.filter((l) => l.status === 'active');
   const withPhotos = listings.filter((l) => l.photosCount > 0).length;
   const weekAgo = Date.now() - 7 * DAY;
@@ -674,27 +700,31 @@ export function getOverview(): OverviewStats {
       admin: db.users.filter((u) => u.role === 'admin').length,
     },
     sellNow: {
-      pending: db.sellNow.filter((r) => r.status === 'pending').length,
-      offered: db.sellNow.filter((r) => r.status === 'offered').length,
-      accepted: db.sellNow.filter((r) => r.status === 'accepted').length,
-      collected: db.sellNow.filter((r) => r.status === 'collected').length,
+      pending: sellNowRows.filter((r) => r.status === 'pending').length,
+      offered: sellNowRows.filter((r) => r.status === 'offered').length,
+      accepted: sellNowRows.filter((r) => r.status === 'accepted').length,
+      collected: sellNowRows.filter((r) => r.status === 'collected').length,
     },
     auctions: {
-      live: db.auctions.filter((a) => a.status === 'live').length,
-      settled: db.auctions.filter((a) => a.status === 'settled').length,
-      failed: db.auctions.filter((a) => a.status === 'failed').length,
+      live: auctionRows.filter((a) => a.status === 'live').length,
+      settled: auctionRows.filter((a) => a.status === 'settled').length,
+      failed: auctionRows.filter((a) => a.status === 'failed').length,
       overdue: countOverdueAuctions(),
     },
-    financing: countByStatus(db.financing, [
+    financing: countByStatus(financingRows, [
       'submitted',
       'contacted',
       'approved',
       'rejected',
     ]) as OverviewStats['financing'],
     trust: {
-      kmVerifiedPct: (listings.filter((l) => l.kmVerified).length / listings.length) * 100,
-      inspectedPct: (listings.filter((l) => l.inspected).length / listings.length) * 100,
-      withPhotosPct: (withPhotos / listings.length) * 100,
+      kmVerifiedPct: listings.length
+        ? (listings.filter((l) => l.kmVerified).length / listings.length) * 100
+        : 0,
+      inspectedPct: listings.length
+        ? (listings.filter((l) => l.inspected).length / listings.length) * 100
+        : 0,
+      withPhotosPct: listings.length ? (withPhotos / listings.length) * 100 : 0,
       pricedPct: active.length
         ? (active.filter((l) => l.marketAvg !== null).length / active.length) * 100
         : 0,
@@ -717,14 +747,30 @@ export function getOverview(): OverviewStats {
 /**
  * سلسلة زمنية بمفاتيح أيام **متصلة** — الأيام الفاضية بصفر مش محذوفة،
  * وإلا الخط بيكدب على الفترات الميتة (§6.2).
+ *
+ * `f` = فلاتر §4.1: مدى مخصص (from/to بياخد أولوية على days) +
+ * محافظة/ماركة للمقاييس المشتقة من الإعلانات.
  */
 export function getTimeseries(
   metric: TimeseriesMetric,
   days = 30,
+  f: StatsFilters = {},
 ): TimeseriesPoint[] {
+  // المدى المخصص بيتحوّل لنطاق أيام صحيح — بحد أقصى سنة
+  let end = Date.now();
+  let span = days;
+  if (f.from && f.to) {
+    const fromMs = +new Date(f.from);
+    const toMs = +new Date(f.to);
+    if (!Number.isNaN(fromMs) && !Number.isNaN(toMs) && toMs >= fromMs) {
+      end = toMs;
+      span = Math.min(365, Math.max(1, Math.round((toMs - fromMs) / DAY) + 1));
+    }
+  }
+
   const buckets = new Map<string, Record<string, number>>();
-  for (let i = days - 1; i >= 0; i--) {
-    buckets.set(cairoKey(new Date(Date.now() - i * DAY).toISOString()), {});
+  for (let i = span - 1; i >= 0; i--) {
+    buckets.set(cairoKey(new Date(end - i * DAY).toISOString()), {});
   }
 
   const add = (dateStr: string | null, series: string) => {
@@ -734,21 +780,34 @@ export function getTimeseries(
     if (b) b[series] = (b[series] ?? 0) + 1;
   };
 
+  const ids = matchingListingIds(f);
+  const inScope = (listingId: string) => !ids || ids.has(listingId);
+
   switch (metric) {
     case 'listings_published':
-      db.listings.forEach((l) => add(l.publishedAt, 'count'));
+      db.listings.filter((l) => listingMatches(l, f)).forEach((l) => add(l.publishedAt, 'count'));
       break;
     case 'users_created':
       db.users.forEach((u) => add(u.createdAt, 'count'));
       break;
     case 'sell_now_requests':
-      db.sellNow.forEach((r) => add(r.createdAt, r.status));
+      db.sellNow.filter((r) => inScope(r.listing.id)).forEach((r) => add(r.createdAt, r.status));
       break;
     case 'auction_bids':
       db.bids.forEach((b) => add(b.createdAt, 'count'));
       break;
     case 'financing_applications':
-      db.financing.forEach((f) => add(f.createdAt, f.status));
+      db.financing.filter((r) => inScope(r.listing.id)).forEach((r) => add(r.createdAt, r.status));
+      break;
+    case 'financing_by_type':
+      // C-33: سلسلتين واضحتين — «مرابحة» و«عادي»
+      db.financing
+        .filter((r) => inScope(r.listing.id))
+        .forEach((r) => add(r.createdAt, r.islamic ? 'islamic' : 'normal'));
+      break;
+    case 'auctions_created':
+      // C-20: سلسلة لكل حالة — الصفحة بتجمّعها أسابيع
+      db.auctions.filter((a) => inScope(a.listing.id)).forEach((a) => add(a.createdAt, a.status));
       break;
     case 'scan_jobs':
       db.scanJobs.forEach((s) => add(s.createdAt, s.status));
@@ -761,7 +820,7 @@ export function getTimeseries(
   return Array.from(buckets.entries()).map(([t, series]) => ({ t, series }));
 }
 
-export function getBreakdown(dimension: BreakdownDimension): BreakdownBucket[] {
+export function getBreakdown(dimension: BreakdownDimension, f: StatsFilters = {}): BreakdownBucket[] {
   const map = new Map<string, { count: number; value: number }>();
   const bump = (key: string, value = 0) => {
     const cur = map.get(key) ?? { count: 0, value: 0 };
@@ -770,38 +829,63 @@ export function getBreakdown(dimension: BreakdownDimension): BreakdownBucket[] {
     map.set(key, cur);
   };
 
+  const listings = db.listings.filter((l) => listingMatches(l, f));
+  const ids = matchingListingIds(f);
+  const inScope = (listingId: string) => !ids || ids.has(listingId);
+
   switch (dimension) {
     case 'make':
-      db.listings.forEach((l) => bump(l.make, l.price));
+      listings.forEach((l) => bump(l.make, l.price));
       break;
     case 'governorate':
-      db.listings.forEach((l) => bump(l.governorate, l.price));
+      listings.forEach((l) => bump(l.governorate, l.price));
       break;
     case 'price_tag':
       // الـnull شريحة ظاهرة صراحة — «مش متسعّر» (P-4)
-      db.listings.forEach((l) => bump(l.priceTag ?? 'unpriced'));
+      listings.forEach((l) => bump(l.priceTag ?? 'unpriced'));
       break;
     case 'listing_status':
-      db.listings.forEach((l) => bump(l.status));
+      listings.forEach((l) => bump(l.status));
       break;
     case 'body':
-      db.listings.forEach((l) => bump(l.body));
+      listings.forEach((l) => bump(l.body));
       break;
     case 'transmission':
-      db.listings.forEach((l) => bump(l.transmission));
+      listings.forEach((l) => bump(l.transmission));
       break;
     case 'price_bucket': {
-      db.listings.forEach((l) => {
+      listings.forEach((l) => {
         const b = Math.floor(l.price / 200_000) * 200_000;
         bump(String(b));
       });
       break;
     }
     case 'term_months':
-      db.financing.forEach((f) => bump(String(f.termMonths)));
+      db.financing.filter((r) => inScope(r.listing.id)).forEach((r) => bump(String(r.termMonths)));
       break;
     case 'down_tier':
-      db.financing.forEach((f) => bump(String(f.downTier)));
+      db.financing.filter((r) => inScope(r.listing.id)).forEach((r) => bump(String(r.downTier)));
+      break;
+    case 'auction_status':
+      // C-24: منه بيتحسب معدل النجاح settled / (settled + failed)
+      db.auctions.filter((a) => inScope(a.listing.id)).forEach((a) => bump(a.status));
+      break;
+    case 'bids_by_exhibition':
+      // C-23: أنشط المعارض — المفتاح اسم المعرض زي ما بيتعرض
+      db.bids.forEach((b) => bump(b.exhibitionName));
+      break;
+    case 'financing_monthly': {
+      // C-34: القسط من الـsnapshot زي ما هو (**مش محسوب من جديد**) — شرايح ٢٬٠٠٠
+      db.financing
+        .filter((r) => inScope(r.listing.id))
+        .forEach((r) => bump(String(Math.floor(r.quoteSnapshot.monthly / 2_000) * 2_000)));
+      break;
+    }
+    case 'sellnow_value':
+      // C-14: القيمة مجموع offer_price — الـpending مالوش عرض لسه فقيمته صفر
+      db.sellNow
+        .filter((r) => inScope(r.listing.id))
+        .forEach((r) => bump(r.status, r.offerPrice ?? 0));
       break;
   }
 
@@ -810,9 +894,12 @@ export function getBreakdown(dimension: BreakdownDimension): BreakdownBucket[] {
     .sort((a, b) => b.count - a.count);
 }
 
-export function getFunnel(name: 'publish' | 'sell_now' | 'financing') {
+export function getFunnel(name: 'publish' | 'sell_now' | 'financing', f: StatsFilters = {}) {
+  const ids = matchingListingIds(f);
+  const inScope = (listingId: string) => !ids || ids.has(listingId);
+
   if (name === 'publish') {
-    const l = db.listings;
+    const l = db.listings.filter((x) => listingMatches(x, f));
     return {
       steps: [
         { key: 'draft', label: 'اتعمل (مسودة)', count: l.length },
@@ -828,7 +915,7 @@ export function getFunnel(name: 'publish' | 'sell_now' | 'financing') {
     };
   }
   if (name === 'sell_now') {
-    const r = db.sellNow;
+    const r = db.sellNow.filter((x) => inScope(x.listing.id));
     const reached = (s: string[]) => r.filter((x) => s.includes(x.status)).length;
     return {
       steps: [
@@ -843,11 +930,11 @@ export function getFunnel(name: 'publish' | 'sell_now' | 'financing') {
       ],
     };
   }
-  const f = db.financing;
-  const reached = (s: string[]) => f.filter((x) => s.includes(x.status)).length;
+  const fin = db.financing.filter((x) => inScope(x.listing.id));
+  const reached = (s: string[]) => fin.filter((x) => s.includes(x.status)).length;
   return {
     steps: [
-      { key: 'submitted', label: 'اتقدّم', count: f.length },
+      { key: 'submitted', label: 'اتقدّم', count: fin.length },
       {
         key: 'contacted',
         label: 'اتواصلنا',
@@ -856,6 +943,33 @@ export function getFunnel(name: 'publish' | 'sell_now' | 'financing') {
       { key: 'approved', label: 'اتوافق عليه', count: reached(['approved']) },
     ],
   };
+}
+
+/**
+ * C-52: نشاط الأدمن — يوم أسبوع × ساعة (بتوقيت القاهرة) من سجل التدقيق.
+ * الباك الحقيقي: `GET /v1/admin/stats/admin-activity` — endpoint ناقص (§6.2).
+ */
+export function getAdminActivity(): AdminActivityCell[] {
+  const grid = new Map<string, number>();
+  for (const e of db.auditLog) {
+    const d = new Date(e.createdAt);
+    // تحويل للقاهرة عن طريق التنسيق — بيراعي التوقيت الصيفي
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Africa/Cairo',
+      weekday: 'short',
+      hour: 'numeric',
+      hour12: false,
+    }).formatToParts(d);
+    const wd = parts.find((p) => p.type === 'weekday')?.value ?? 'Sun';
+    const hour = Number(parts.find((p) => p.type === 'hour')?.value ?? '0') % 24;
+    const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(wd);
+    const k = `${day}:${hour}`;
+    grid.set(k, (grid.get(k) ?? 0) + 1);
+  }
+  return Array.from(grid.entries()).map(([k, count]) => {
+    const [day, hour] = k.split(':').map(Number);
+    return { day: day!, hour: hour!, count };
+  });
 }
 
 /* ═══════════════════════ بوابة المعارض ═══════════════════════ */
@@ -874,6 +988,59 @@ export function getMyListings(exhibitionId = DEMO_EXHIBITION_ID): Listing[] {
 
 export function getMyChats(): ChatThread[] {
   return [...db.chats].sort((a, b) => asTime(b.lastMessageAt) - asTime(a.lastMessageAt));
+}
+
+function threadOrThrow(threadId: string): ChatThread {
+  const t = db.chats.find((c) => c.id === threadId);
+  if (!t) throw new ApiError('NOT_FOUND', 'المحادثة دي مش موجودة', null, 404);
+  return t;
+}
+
+/** رسايل محادثة بالترتيب الزمني — GET /v1/chats/{id}/messages */
+export function getThreadMessages(threadId: string): ChatMessage[] {
+  threadOrThrow(threadId);
+  return db.chatMessages
+    .filter((m) => m.threadId === threadId)
+    .sort((a, b) => asTime(a.at) - asTime(b.at));
+}
+
+/** فتح المحادثة بيصفّر غير المقروء — POST /v1/chats/{id}/read */
+export function markThreadRead(threadId: string): ChatThread {
+  const t = threadOrThrow(threadId);
+  t.unread = 0;
+  return t;
+}
+
+/** رد المعرض — POST /v1/chats/{id}/messages */
+export function sendChatMessage(threadId: string, body: string): ChatMessage {
+  const t = threadOrThrow(threadId);
+  const text = body.trim();
+  if (!text) throw new ApiError('VALIDATION_ERROR', 'اكتب رسالة الأول', null, 422);
+
+  const msg: ChatMessage = {
+    id: `${threadId}-m${Date.now()}`,
+    threadId,
+    from: 'exhibition',
+    body: text,
+    at: new Date().toISOString(),
+  };
+  db.chatMessages.push(msg);
+
+  t.lastMessage = text;
+  t.lastMessageAt = msg.at;
+  t.messagesCount += 1;
+  t.unread = 0; // بترد يبقى إنت شايف الرسايل
+
+  // أول رد بيثبّت مؤشر زمن أول رد — من أول رسالة للمشتري
+  if (t.firstResponseMinutes === null) {
+    const first = db.chatMessages
+      .filter((m) => m.threadId === threadId && m.from === 'buyer')
+      .sort((a, b) => asTime(a.at) - asTime(b.at))[0];
+    if (first) {
+      t.firstResponseMinutes = Math.max(1, Math.round((asTime(msg.at) - asTime(first.at)) / 60_000));
+    }
+  }
+  return msg;
 }
 
 export function getMyEntries(exhibitionId = DEMO_EXHIBITION_ID): AuctionEntry[] {
@@ -938,3 +1105,55 @@ export function getExhibitionStats(exhibitionId = DEMO_EXHIBITION_ID): Exhibitio
 export { MOCK_NOW, ADMIN_USER, seed };
 export const myBidsOf = (exhibitionId = DEMO_EXHIBITION_ID) =>
   db.bids.filter((b) => b.bidderId === exhibitionId);
+
+/* ═══════════════════════ الكتالوج ═══════════════════════ */
+
+const byAr = (a: string, b: string) => a.localeCompare(b, 'ar');
+const uniqueSorted = (values: string[]) => Array.from(new Set(values)).sort(byAr);
+
+function groupUnique(
+  rows: Listing[],
+  key: (l: Listing) => string,
+  value: (l: Listing) => string,
+): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const l of rows) {
+    const k = key(l);
+    const list = out[k] ?? (out[k] = []);
+    const v = value(l);
+    if (!list.includes(v)) list.push(v);
+  }
+  for (const k of Object.keys(out)) out[k]!.sort(byAr);
+  return out;
+}
+
+/**
+ * كتالوج الماركات والمحافظات — بديل `GET /v1/catalog/*` في وضع الموك.
+ * مشتق من نفس داتا الموك عشان الاختيارات تبقى متسقة مع المخزون
+ * ومايحصلش «موديل مش متحلّل» في المعاينة.
+ */
+export function getCatalog(): Catalog {
+  const rows = db.listings;
+  return {
+    makes: uniqueSorted(rows.map((l) => l.make)),
+    modelsByMake: groupUnique(rows, (l) => l.make, (l) => l.model),
+    governorates: uniqueSorted(rows.map((l) => l.governorate)),
+    areasByGov: groupUnique(rows, (l) => l.governorate, (l) => l.area),
+    bodies: uniqueSorted(rows.map((l) => l.body)),
+    colors: uniqueSorted(rows.map((l) => l.color)),
+  };
+}
+
+/**
+ * طلب الترقية بتاعي — بديل `GET /v1/exhibitions/applications/me` (§8.2).
+ * `preferStatus` للديمو بس: بيرجّع طلب بالحالة المطلوبة عشان الخمس
+ * شاشات في `/apply/status` تتراجع من غير قرار أدمن حقيقي.
+ */
+export function getMyApplication(preferStatus?: ApplicationStatus): ExhibitionApplication {
+  const found = preferStatus
+    ? db.applications.find((a) => a.status === preferStatus)
+    : db.applications.find((a) => a.status === 'submitted');
+  const app = found ?? db.applications[0];
+  if (!app) throw new ApiError('NOT_FOUND', 'مفيش طلب ترقية لحسابك');
+  return app;
+}

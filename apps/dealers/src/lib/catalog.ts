@@ -1,19 +1,19 @@
-'use client';
-
 import { withThousands } from '@carq/ui';
-import { mockDb, type Transmission } from '@carq/api-client';
+import type { Transmission } from '@carq/api-client';
 
 /**
  * ════════════════════════════════════════════════════════════════
- * كتالوج الماركات والمحافظات — مؤقت
+ * أدوات الكتالوج والتحقق — دوال نقية بس
  *
- * المفروض ييجي من `GET /v1/catalog/makes` و`/governorates`
- * (EXHIBITION_PORTAL_SPEC §8.1). لحد ما الـhooks دي تتبني، بنشتق
- * القوايم من نفس داتا الموك عشان الاختيارات تبقى متسقة مع المخزون
- * ومايحصلش موديل مش متحلّل.
+ * قوايم الماركات والمحافظات نفسها بتيجي من `useCatalog()` في
+ * `@carq/api-client` (بديل `GET /v1/catalog/*` — §8.1) — مش من هنا.
+ * الملف ده فيه بس اللي مش بيتغيّر مع الباك اند:
  *
- * وحدود التحقق (`L-3`) متعرّفة هنا مرة واحدة عشان فورم الإضافة
- * وفورم التعديل والرفع بالجملة يبقوا بنفس القواعد بالظبط.
+ *  · حدود التحقق (`L-3`) متعرّفة مرة واحدة عشان فورم الإضافة
+ *    وفورم التعديل والرفع بالجملة يبقوا بنفس القواعد بالظبط.
+ *  · تطبيع الأرقام الهندية والنص العربي — إكسل والموبايل بيبعتوهم كتير.
+ *  · `resolveFrom` بيحل القيمة الخام مقابل قايمة الكتالوج —
+ *    وبيرجع `null` لو مش متحلّلة بدل ما يخمّن.
  * ════════════════════════════════════════════════════════════════
  */
 
@@ -24,40 +24,7 @@ export const YEAR_MAX = new Date().getFullYear() + 1;
 export const KM_MIN = 0;
 export const KM_MAX = 2_000_000;
 
-const byAr = (a: string, b: string) => a.localeCompare(b, 'ar');
-
-const uniqueSorted = (values: string[]) => Array.from(new Set(values)).sort(byAr);
-
-const groupBy = (key: (l: (typeof mockDb.listings)[number]) => string, value: (l: (typeof mockDb.listings)[number]) => string) => {
-  const out: Record<string, string[]> = {};
-  for (const l of mockDb.listings) {
-    const k = key(l);
-    const list = out[k] ?? (out[k] = []);
-    const v = value(l);
-    if (!list.includes(v)) list.push(v);
-  }
-  for (const k of Object.keys(out)) out[k]!.sort(byAr);
-  return out;
-};
-
-export const MAKES: string[] = uniqueSorted(mockDb.listings.map((l) => l.make));
-
-export const MODELS_BY_MAKE: Record<string, string[]> = groupBy(
-  (l) => l.make,
-  (l) => l.model,
-);
-
-export const GOVERNORATES: string[] = uniqueSorted(mockDb.listings.map((l) => l.governorate));
-
-export const AREAS_BY_GOV: Record<string, string[]> = groupBy(
-  (l) => l.governorate,
-  (l) => l.area,
-);
-
-export const BODIES: string[] = uniqueSorted(mockDb.listings.map((l) => l.body));
-
-export const COLORS: string[] = uniqueSorted(mockDb.listings.map((l) => l.color));
-
+/** ناقل الحركة ثابت في المنتج — مش جزء من كتالوج السيرفر */
 export const TRANSMISSIONS: Transmission[] = ['أوتوماتيك', 'مانيوال'];
 
 /* ═══════════════════════ تطبيع النص والأرقام ═══════════════════════ */

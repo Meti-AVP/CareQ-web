@@ -125,6 +125,14 @@ export default function AuctionRoomPage() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   /** 429: تعطيل مؤقت — **مش إعادة محاولة تلقائية** (§10.6) */
   const [cooldown, setCooldown] = useState(false);
+  const cooldownTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // تنضيف المؤقت مع الخروج — setState بعد unmount تحذير وتسريب
+  useEffect(
+    () => () => {
+      if (cooldownTimer.current) clearTimeout(cooldownTimer.current);
+    },
+    [],
+  );
   const [clockEnded, setClockEnded] = useState(false);
   const [extendNote, setExtendNote] = useState<string | null>(null);
 
@@ -172,15 +180,23 @@ export default function AuctionRoomPage() {
   /* ─────────── الشروط الثلاثة (A-1) — كل واحد بسببه وخطوته ─────────── */
   const isOwnListing =
     blocked?.code === 'CANNOT_BID_OWN_LISTING' ||
+    blocked?.code === 'SELF_BID' ||
     Boolean(exhibition && auction && auction.sellerId === exhibition.userId);
   const notContracted =
     blocked?.code === 'NOT_CONTRACTED' || Boolean(exhibition && !exhibition.isContracted);
+  const notVerified = Boolean(exhibition && !exhibition.verified);
   const entryMissing = !entry && !auction?.myEntry;
   const entryUnpaid = !entryMissing && !(entry?.paidAt || auction?.myEntry?.paid);
 
   const ended = Boolean(auction && (auction.status !== 'live' || clockEnded));
   const canBid =
-    Boolean(auction) && !ended && !notContracted && !entryMissing && !entryUnpaid && !isOwnListing;
+    Boolean(auction) &&
+    !ended &&
+    !notVerified &&
+    !notContracted &&
+    !entryMissing &&
+    !entryUnpaid &&
+    !isOwnListing;
   /** لسه بنقرا حالة الدخول — متعرضش «مش مسجّل» وإحنا لسه مش عارفين */
   const entryUnknown = entriesQ.isLoading && !entry && !auction?.myEntry;
 
@@ -190,7 +206,12 @@ export default function AuctionRoomPage() {
    * لحد ما مزايدة ناجحة أو تحديث الصفحة يثبت العكس (A-0).
    */
   useEffect(() => {
-    if (blocked?.code === 'ENTRY_NOT_PAID' && !entryMissing && !entryUnpaid) setBlocked(null);
+    if (
+      (blocked?.code === 'ENTRY_NOT_PAID' || blocked?.code === 'ENTRY_UNPAID') &&
+      !entryMissing &&
+      !entryUnpaid
+    )
+      setBlocked(null);
   }, [blocked, entryMissing, entryUnpaid]);
 
   const myTopBid = useMemo(() => {
@@ -223,21 +244,24 @@ export default function AuctionRoomPage() {
         void exhibitionQ.refetch();
         return;
 
-      // أكتر خطأ متوقع — افتح فلو الدفع فورًا
+      // أكتر خطأ متوقع — افتح فلو الدفع فورًا (ENTRY_UNPAID اسم بديل من الباك)
       case 'ENTRY_NOT_PAID':
+      case 'ENTRY_UNPAID':
         setBlocked({ code, message });
         void entriesQ.refetch();
         setPayOpen(true);
         return;
 
-      // A-7 — الزرار بيتخفي، والخطأ بيتستقبل برضه
+      // A-7 — الزرار بيتخفي، والخطأ بيتستقبل برضه (SELF_BID اسم بديل)
       case 'CANNOT_BID_OWN_LISTING':
+      case 'SELF_BID':
         setBlocked({ code, message });
         return;
 
-      // اسحب الحالة، اقفل، واعرض النتيجة
+      // اسحب الحالة، اقفل، واعرض النتيجة (AUCTION_CLOSED اسم بديل)
       case 'AUCTION_NOT_LIVE':
       case 'AUCTION_ENDED':
+      case 'AUCTION_CLOSED':
         setBlocked({ code, message });
         setClockEnded(true);
         await auctionQ.refetch();
@@ -258,7 +282,8 @@ export default function AuctionRoomPage() {
       case 'RATE_LIMITED':
         setCooldown(true);
         toast({ title: message, body: 'استنى ثانيتين وجرّب تاني.', tone: 'crit' });
-        setTimeout(() => setCooldown(false), 2000);
+        if (cooldownTimer.current) clearTimeout(cooldownTimer.current);
+        cooldownTimer.current = setTimeout(() => setCooldown(false), 2000);
         return;
 
       default:
@@ -689,29 +714,51 @@ export default function AuctionRoomPage() {
               </Card>
             ) : (
               <Card>
-                <Button
-                  className="w-full"
-                  size="lg"
-                  icon={<Gavel />}
-                  disabled={!canBid || cooldown}
-                  loading={placeBid.isPending}
-                  onClick={() => setConfirmOpen(true)}
-                >
-                  زايد {formatEGP(auction.nextBid)}
-                </Button>
-                <p className="mt-3 text-caption text-content-sub">
-                  الرقم ده جاي من السيرفر زي ما هو — خطوة المزايدة {formatEGP(auction.bidStep)}،
-                  والمزايدة ملزمة.
-                </p>
-                {cooldown ? (
-                  <p className="mt-2 flex items-center gap-1.5 text-caption font-bold text-crit">
-                    <Clock3 className="h-3.5 w-3.5" />
-                    وصلت حد المزايدات في الدقيقة — الزرار هيرجع بعد ثانيتين.
+                {/*
+                  تشيك ليست الشروط الثلاثة (A-1) **قبل الزرار** —
+                  المزايد لازم يعرف هو مؤهل ولا لأ قبل ما يمد إيده.
+                */}
+                <div className="space-y-3">
+                  <p
+                    className={
+                      notVerified
+                        ? 'flex items-center gap-1.5 text-sub font-bold text-warn'
+                        : 'flex items-center gap-1.5 text-sub font-bold text-ok'
+                    }
+                  >
+                    {notVerified ? (
+                      <>
+                        <AlertTriangle className="h-4 w-4" />
+                        معرضك لسه مش موثّق
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="h-4 w-4" />
+                        معرضك موثّق
+                      </>
+                    )}
                   </p>
-                ) : null}
 
-                {/* الشروط الناقصة بتتشرح — مش الأزرار بتتخفي وخلاص (§5) */}
-                <div className="mt-4 space-y-3 border-t border-line pt-4">
+                  <p
+                    className={
+                      notContracted
+                        ? 'flex items-center gap-1.5 text-sub font-bold text-warn'
+                        : 'flex items-center gap-1.5 text-sub font-bold text-ok'
+                    }
+                  >
+                    {notContracted ? (
+                      <>
+                        <FileSignature className="h-4 w-4" />
+                        العقد مش ساري — المزايدة مقفولة
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="h-4 w-4" />
+                        معرضك متعاقد
+                      </>
+                    )}
+                  </p>
+
                   {entryUnknown ? (
                     <p className="flex items-center gap-1.5 text-sub text-content-sub">
                       <Clock3 className="h-4 w-4 text-content-faint" />
@@ -758,40 +805,44 @@ export default function AuctionRoomPage() {
                       دخولك متأكّد — تقدر تزايد
                     </p>
                   )}
+                </div>
 
-                  <p
-                    className={
-                      notContracted
-                        ? 'flex items-center gap-1.5 text-sub font-bold text-warn'
-                        : 'flex items-center gap-1.5 text-sub font-bold text-ok'
-                    }
+                <div className="mt-4 border-t border-line pt-4">
+                  <Button
+                    className="w-full"
+                    size="lg"
+                    icon={<Gavel />}
+                    disabled={!canBid || cooldown}
+                    loading={placeBid.isPending}
+                    onClick={() => setConfirmOpen(true)}
                   >
-                    {notContracted ? (
-                      <>
-                        <FileSignature className="h-4 w-4" />
-                        العقد مش ساري — المزايدة مقفولة
-                      </>
-                    ) : (
-                      <>
-                        <CheckCircle2 className="h-4 w-4" />
-                        معرضك متعاقد
-                      </>
-                    )}
+                    زايد {formatEGP(auction.nextBid)}
+                  </Button>
+                  <p className="mt-3 text-caption text-content-sub">
+                    الرقم ده جاي من السيرفر زي ما هو — خطوة المزايدة {formatEGP(auction.bidStep)}،
+                    والمزايدة ملزمة.
                   </p>
+                  {cooldown ? (
+                    <p className="mt-2 flex items-center gap-1.5 text-caption font-bold text-crit">
+                      <Clock3 className="h-3.5 w-3.5" />
+                      وصلت حد المزايدات في الدقيقة — الزرار هيرجع بعد ثانيتين.
+                    </p>
+                  ) : null}
                 </div>
               </Card>
             )}
 
-            {/* رسالة السيرفر زي ما هي (X-4) لأي كود مالوش شاشة مخصوصة */}
-            {blocked &&
-            blocked.code !== 'NOT_CONTRACTED' &&
-            blocked.code !== 'CANNOT_BID_OWN_LISTING' ? (
-              <Banner tone="crit" icon={<AlertTriangle />} title={blocked.message}>
-                {blocked.code === 'ENTRY_NOT_PAID'
-                  ? 'دخولك في المزاد لسه مش متأكّد — التفاصيل في نافذة الدفع.'
-                  : 'اسحب الحالة تاني قبل أي مزايدة.'}
-              </Banner>
-            ) : null}
+        {/* رسالة السيرفر زي ما هي (X-4) لأي كود مالوش شاشة مخصوصة */}
+        {blocked &&
+        blocked.code !== 'NOT_CONTRACTED' &&
+        blocked.code !== 'CANNOT_BID_OWN_LISTING' &&
+        blocked.code !== 'SELF_BID' ? (
+          <Banner tone="crit" icon={<AlertTriangle />} title={blocked.message}>
+            {blocked.code === 'ENTRY_NOT_PAID' || blocked.code === 'ENTRY_UNPAID'
+              ? 'دخولك في المزاد لسه مش متأكّد — التفاصيل في نافذة الدفع.'
+              : 'اسحب الحالة تاني قبل أي مزايدة.'}
+          </Banner>
+        ) : null}
           </aside>
         </div>
 

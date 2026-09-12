@@ -72,9 +72,6 @@ import {
  * ════════════════════════════════════════════════════════════════
  */
 
-/** عرض «بيع حالًا» = ٩١٪ من سعر الإعلان (SN-1) */
-const SELL_NOW_RATIO = 0.91;
-
 const STATUS_BADGE: Record<AuctionStatus, { label: string; tone: Tone; icon: ReactNode }> = {
   live: { label: 'شغال', tone: 'accent', icon: <Gavel /> },
   settled: { label: 'متسوّى', tone: 'ok', icon: <CheckCircle2 /> },
@@ -154,8 +151,7 @@ export default function AuctionDetailPage() {
     ];
   }, [a, bidRows]);
 
-  const sellNowEquivalent = a ? Math.round((a.listing.price * SELL_NOW_RATIO) / 1000) * 1000 : 0;
-  const beatsSellNow = a ? a.currentBid >= sellNowEquivalent : false;
+  /** عرض من رقمين جايين من السيرفر — مفيش إعادة حساب لنسب البيزنس هنا (SN-1) */
   const risePct = a && a.startPrice > 0 ? ((a.currentBid - a.startPrice) / a.startPrice) * 100 : 0;
   const paidCount = entryRows.filter((e) => e.paidAt !== null).length;
 
@@ -435,20 +431,16 @@ export default function AuctionDetailPage() {
                     </div>
 
                     <div className="mt-4 border-t border-line pt-3">
-                      <p className="text-sub text-content-sub">
-                        عرض «بيع حالًا» المكافئ للعربية دي{' '}
-                        <span className="tnum font-bold text-content">
-                          {formatEGP(sellNowEquivalent)}
-                        </span>{' '}
-                        —{' '}
-                        {a.bidsCount === 0 ? (
-                          <span className="text-content-faint">لسه مفيش مزايدات للمقارنة</span>
-                        ) : beatsSellNow ? (
-                          <span className="font-bold text-ok">المزاد عدّاه</span>
-                        ) : (
-                          <span className="font-bold text-warn">المزاد لسه تحته</span>
-                        )}
-                      </p>
+                      {a.bidsCount > 0 && a.startPrice > 0 ? (
+                        <p className="text-sub text-content-sub">
+                          أعلى مزايدة فوق سعر البداية بـ{' '}
+                          <span className="tnum font-bold text-content">
+                            {Math.round(risePct)}٪
+                          </span>
+                        </p>
+                      ) : (
+                        <p className="text-sub text-content-faint">لسه مفيش مزايدات</p>
+                      )}
                       <Link
                         href={`/listings/${a.listing.id}`}
                         className="mt-1 inline-block text-caption text-accent transition-colors hover:text-content"

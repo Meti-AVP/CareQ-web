@@ -44,7 +44,13 @@ import {
   type TabDef,
   type Tone,
 } from '@carq/ui';
-import { errorMessage, useHealth, useScanJobs, useTimeseries } from '@carq/api-client';
+import {
+  errorMessage,
+  useAdminActivity,
+  useHealth,
+  useScanJobs,
+  useTimeseries,
+} from '@carq/api-client';
 import type { ScanJob, ScanJobStatus } from '@carq/api-client';
 
 /**
@@ -115,14 +121,24 @@ const SCAN_STATUS: Record<ScanJobStatus, { label: string; tone: Tone; icon: Reac
 /** ترتيب ثابت للسلاسل في C-50 — عشان اللون مايتنططش بين التحديثات */
 const SERIES_ORDER: ScanJobStatus[] = ['done', 'running', 'queued', 'failed'];
 
+/** أيام C-52 — الفهرس 0 = الأحد (زي `AdminActivityCell.day`) */
+const DAYS_AR = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+
 export default function HealthPage() {
   const [tab, setTab] = useState<ScanJobStatus>('queued');
 
+  /** الصفحات بالـcursor — بيتصفّر مع تغيير التبويب */
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [trail, setTrail] = useState<Array<string | null>>([]);
+
   const health = useHealth();
   const scanSeries = useTimeseries('scan_jobs', 14);
+  /** التلات استعلامات دايمًا شغالة — عدادات التبويبات من `total` بتاعها */
   const queuedJobs = useScanJobs('queued');
   const failedJobs = useScanJobs('failed');
   const doneJobs = useScanJobs('done');
+  /** جدول التبويب الحالي بيتبع الـcursor */
+  const paged = useScanJobs(tab, cursor);
 
   const h = health.data;
 
@@ -247,8 +263,31 @@ export default function HealthPage() {
     0,
   );
 
+  /* ───── C-52: نشاط الأدمن يوم × ساعة (بتوقيت القاهرة) ───── */
+  const activity = useAdminActivity();
+  const activityGrid = useMemo(() => {
+    const m = new Map<string, number>();
+    (activity.data ?? []).forEach((c) => m.set(`${c.day}:${c.hour}`, c.count));
+    return m;
+  }, [activity.data]);
+  const maxActivity = useMemo(
+    () => Math.max(1, ...(activity.data ?? []).map((c) => c.count)),
+    [activity.data],
+  );
+  const activityTable = useMemo(
+    () =>
+      [...(activity.data ?? [])]
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 20)
+        .map((c) => ({
+          label: `${DAYS_AR[c.day]} ${String(c.hour).padStart(2, '0')}:00`,
+          count: c.count,
+        })),
+    [activity.data],
+  );
+
   /* ───── جدول المهام ───── */
-  const active = tab === 'queued' ? queuedJobs : tab === 'failed' ? failedJobs : doneJobs;
+  const active = paged;
 
   const tabs: TabDef[] = [
     {
@@ -498,6 +537,7 @@ export default function HealthPage() {
             height={280}
             loading={scanSeries.isLoading}
             error={scanSeries.isError ? errorMessage(scanSeries.error) : undefined}
+            onRetry={() => scanSeries.refetch()}
             isEmpty={!scanSeries.isLoading && !scanSeries.isError && scanTotal === 0}
             series={scanSeriesDefs}
             footnote="عمود فيه شريحة «في الطابور» متراكمة على أيام ورا بعض معناه إن الطابور مابيتفضّيش — مش إن الضغط زاد."
@@ -517,6 +557,65 @@ export default function HealthPage() {
           </ChartFrame>
         </div>
 
+        {/* ───────── C-52: نشاط الأدمن ───────── */}
+        <div className="mb-9">
+          <ChartFrame
+            code="C-52"
+            title="نشاط الأدمن — يوم × ساعة"
+            hint="من سجل التدقيق بتوقيت القاهرة — الخلية الأغمق = أكشنات أكتر"
+            height={240}
+            loading={activity.isLoading}
+            error={activity.isError ? errorMessage(activity.error) : undefined}
+            onRetry={() => activity.refetch()}
+            isEmpty={!activity.isLoading && (activity.data?.length ?? 0) === 0}
+            footnote="بيقول إمتى الفريق فعلًا بيشتغل — مفيد لجدولة الصيانة بعيد عن ساعات الذروة"
+            tableColumns={[
+              { key: 'label', label: 'اليوم والساعة' },
+              { key: 'count', label: 'أكشنات' },
+            ]}
+            tableRows={activityTable}
+          >
+            <div className="overflow-x-auto pt-2">
+              <div className="min-w-[620px]">
+                {/* صف الساعات */}
+                <div className="mb-1 grid grid-cols-[64px_repeat(24,minmax(0,1fr))] gap-[3px]">
+                  <span />
+                  {Array.from({ length: 24 }, (_, hr) => (
+                    <span key={hr} className="tnum text-center text-[10px] text-content-faint">
+                      {hr % 6 === 0 ? hr : ''}
+                    </span>
+                  ))}
+                </div>
+                {DAYS_AR.map((day, di) => (
+                  <div
+                    key={day}
+                    className="mb-[3px] grid grid-cols-[64px_repeat(24,minmax(0,1fr))] gap-[3px]"
+                  >
+                    <span className="self-center text-caption text-content-sub">{day}</span>
+                    {Array.from({ length: 24 }, (_, hr) => {
+                      const count = activityGrid.get(`${di}:${hr}`) ?? 0;
+                      return (
+                        <span
+                          key={hr}
+                          className="relative h-5 overflow-hidden rounded-[3px] bg-muted-soft"
+                          title={`${day} ${String(hr).padStart(2, '0')}:00 — ${withThousands(count)} أكشن`}
+                        >
+                          {count > 0 ? (
+                            <span
+                              className="absolute inset-0 bg-accent"
+                              style={{ opacity: 0.2 + 0.8 * (count / maxActivity) }}
+                            />
+                          ) : null}
+                        </span>
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </ChartFrame>
+        </div>
+
         {/* ───────── جدول مهام السكان ───────── */}
         <SectionHeader
           title="مهام السكان"
@@ -524,7 +623,15 @@ export default function HealthPage() {
         />
 
         <div className="mb-4">
-          <Tabs tabs={tabs} value={tab} onChange={(k) => setTab(k as ScanJobStatus)} />
+          <Tabs
+            tabs={tabs}
+            value={tab}
+            onChange={(k) => {
+              setTab(k as ScanJobStatus);
+              setCursor(null);
+              setTrail([]);
+            }}
+          />
         </div>
 
         <DataTable<ScanJob>
@@ -540,12 +647,28 @@ export default function HealthPage() {
           searchable
           searchPlaceholder="دوّر باسم العربية أو سبب الفشل…"
           exportName={`scan-jobs-${tab}`}
+          hasMore={Boolean(active.data?.nextCursor)}
+          canPrev={trail.length > 0}
+          onNext={() => {
+            setTrail((t) => [...t, cursor]);
+            setCursor(active.data?.nextCursor ?? null);
+          }}
+          onPrev={() => {
+            const prev = trail.length ? (trail[trail.length - 1] ?? null) : null;
+            setTrail((t) => t.slice(0, -1));
+            setCursor(prev);
+          }}
+          pageInfo={
+            active.data?.total
+              ? `${withThousands(trail.length * 25 + 1)} – ${withThousands(trail.length * 25 + (active.data?.items.length ?? 0))} من ${withThousands(active.data.total)} مهمة`
+              : undefined
+          }
         />
 
         <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-caption text-content-faint">
           <span className="flex items-center gap-2">
             <Clock className="h-3.5 w-3.5 shrink-0" />
-            الجدول بيعرض أحدث ٢٥ مهمة في كل تبويب
+            الجدول بيعرض ٢٥ مهمة في الصفحة — قلّب بالأزرار تحت
           </span>
           <span className="flex items-center gap-2">
             <Timer className="h-3.5 w-3.5 shrink-0" />

@@ -12,6 +12,7 @@ import {
   Hourglass,
   Plus,
   Receipt,
+  Trophy,
 } from 'lucide-react';
 import {
   Badge,
@@ -30,12 +31,14 @@ import {
   formatEGP,
   useToast,
   waitingFor,
+  withThousands,
   type Column,
 } from '@carq/ui';
 import {
   errorMessage,
   useCreateEntry,
   useDealerAuctions,
+  useExhibitionStats,
   useMyEntries,
   useMyExhibition,
 } from '@carq/api-client';
@@ -68,6 +71,7 @@ export default function BillingPage() {
   const entries = useMyEntries();
   const exhibition = useMyExhibition();
   const liveAuctions = useDealerAuctions('live');
+  const stats = useExhibitionStats();
   const createEntry = useCreateEntry();
 
   const [filter, setFilter] = useState<Filter>('all');
@@ -77,6 +81,8 @@ export default function BillingPage() {
   const pending = all.filter((e) => e.paidAt === null);
   const paid = all.filter((e) => e.paidAt !== null);
   const feesTotal = all.reduce((s, e) => s + e.fee, 0);
+  /** D-13: الرسوم المدفوعة فعلًا مقابل المكاسب — بلاطتين جنب بعض */
+  const paidFeesTotal = paid.reduce((s, e) => s + e.fee, 0);
 
   const rows = filter === 'pending' ? pending : filter === 'paid' ? paid : all;
 
@@ -228,6 +234,7 @@ export default function BillingPage() {
             value={all.length}
             icon={<Gavel />}
             hint="كل دخول مسجّل — مدفوع أو مستني"
+            loading={entries.isLoading}
           />
           <StatTile
             label="مستني تأكيد التحويل"
@@ -235,6 +242,7 @@ export default function BillingPage() {
             icon={<Hourglass />}
             alertWhenPositive
             hint="المزايدة في المزادات دي مقفولة لحد التأكيد"
+            loading={entries.isLoading}
           />
           <StatTile
             label="دخول متفعّل"
@@ -242,6 +250,7 @@ export default function BillingPage() {
             icon={<CheckCircle2 />}
             tone="ok"
             hint="الشرط التالت من شروط المزايدة اتحقق فيها"
+            loading={entries.isLoading}
           />
           <StatTile
             label="إجمالي الرسوم المسجّلة"
@@ -249,6 +258,31 @@ export default function BillingPage() {
             icon={<Banknote />}
             format={(n) => (n > 0 ? formatEGP(n) : 'صفر')}
             hint="بيفضل صفر لحد ما سياسة الرسوم تتقرر"
+            loading={entries.isLoading}
+          />
+        </div>
+
+        {/* ───── D-13: رسوم مدفوعة مقابل مكاسب — بلاطتين (قسم ٧) ───── */}
+        <SectionHeader
+          title="اللي دفعته مقابل اللي كسبته"
+          hint="الرسوم المؤكّدة فعلًا جنب عدد المزادات اللي كسبتها — عشان تشوف الدفع بيرجع بإيه"
+        />
+        <div className="mb-9 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <StatTile
+            label="رسوم مدفوعة ومؤكّدة"
+            value={paidFeesTotal}
+            icon={<Banknote />}
+            format={(n) => (n > 0 ? formatEGP(n) : 'صفر')}
+            hint={`من ${withThousands(paid.length)} دخول متفعّل`}
+            loading={entries.isLoading}
+          />
+          <StatTile
+            label="مزادات كسبتها (٣٠ يوم)"
+            value={stats.data?.wins30d ?? 0}
+            icon={<Trophy />}
+            tone="ok"
+            href="/auctions/mine"
+            loading={stats.isLoading}
           />
         </div>
 

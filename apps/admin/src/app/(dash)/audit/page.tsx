@@ -26,6 +26,7 @@ import {
 import {
   Badge,
   Banner,
+  Button,
   Card,
   EmptyState,
   ErrorState,
@@ -263,7 +264,15 @@ export default function AuditPage() {
   const [q, setQ] = useState('');
   const [openId, setOpenId] = useState<string | null>(null);
 
-  const audit = useAudit({ entityType, action });
+  /** ترقيم بالـcursor — «أقدم» بينزل صفحة، و«أحدث» بيرجع */
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [trail, setTrail] = useState<Array<string | null>>([]);
+  const resetPage = () => {
+    setCursor(null);
+    setTrail([]);
+  };
+
+  const audit = useAudit({ entityType, action, cursor });
 
   const rows = useMemo(() => {
     const items = audit.data?.items ?? [];
@@ -318,7 +327,13 @@ export default function AuditPage() {
         <Card className="mb-6">
           <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
             <Field label="نوع الكيان">
-              <Select value={entityType} onChange={(e) => setEntityType(e.target.value)}>
+              <Select
+                value={entityType}
+                onChange={(e) => {
+                  setEntityType(e.target.value);
+                  resetPage();
+                }}
+              >
                 {ENTITY_FILTERS.map((o) => (
                   <option key={o.value} value={o.value}>
                     {o.label}
@@ -328,7 +343,13 @@ export default function AuditPage() {
             </Field>
 
             <Field label="نوع الأكشن">
-              <Select value={action} onChange={(e) => setAction(e.target.value)}>
+              <Select
+                value={action}
+                onChange={(e) => {
+                  setAction(e.target.value);
+                  resetPage();
+                }}
+              >
                 {ACTION_FILTERS.map((o) => (
                   <option key={o.value} value={o.value}>
                     {o.label}
@@ -350,13 +371,13 @@ export default function AuditPage() {
             </Field>
           </div>
 
-          {/* قيد حقيقي في الـendpoint — لازم يبان جنب الفلاتر مش في ملف بعيد */}
+          {/* حدود الشاشة دي — لازم تبان جنب الفلاتر مش في ملف بعيد */}
           <p className="mt-4 flex items-start gap-2 border-t border-line pt-3.5 text-caption text-content-sub">
             <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             <span>
-              قيد حالي: الـendpoint بيرجّع آخر ٢٠٠ صف بس، من غير ترقيم صفحات ولا فلترة
-              بالتاريخ (§6.3). يعني الفلاتر دي بتشتغل على الدفعة المحمّلة — لو بتدوّر على حدث
-              أقدم، ده محتاج تعديل في الباك اند مش في الشاشة.
+              الشاشة بتبعت `cursor` وبتقلّب صفحة صفحة — الباك لازم يحترمه (§6.3). البحث
+              النصي بيدوّر في الصفحة المعروضة بس؛ فلترة الكيان والأكشن بتحصل في السيرفر
+              على السجل كله.
             </span>
           </p>
         </Card>
@@ -402,6 +423,42 @@ export default function AuditPage() {
             ))}
           </ol>
         )}
+
+        {/* ───────── الترقيم: أحدث / أقدم ───────── */}
+        {!audit.isLoading && !audit.isError && (trail.length > 0 || audit.data?.nextCursor) ? (
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
+            <p className="tnum text-caption text-content-sub">
+              {audit.data?.total
+                ? `${withThousands(trail.length * 25 + 1)} – ${withThousands(trail.length * 25 + (audit.data?.items.length ?? 0))} من ${withThousands(audit.data.total)} حدث`
+                : null}
+            </p>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={trail.length === 0}
+                onClick={() => {
+                  const prev = trail.length ? (trail[trail.length - 1] ?? null) : null;
+                  setTrail((t) => t.slice(0, -1));
+                  setCursor(prev);
+                }}
+              >
+                الأحدث
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!audit.data?.nextCursor}
+                onClick={() => {
+                  setTrail((t) => [...t, cursor]);
+                  setCursor(audit.data?.nextCursor ?? null);
+                }}
+              >
+                أقدم
+              </Button>
+            </div>
+          </div>
+        ) : null}
 
         {rows.length > 0 ? (
           <p className="mt-5 flex items-center gap-2 text-caption text-content-faint">

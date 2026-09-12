@@ -2,6 +2,7 @@
 
 export * from './tokens';
 export { cn } from './lib/cn';
+export { csvCell, buildCsv, downloadCsv } from './lib/csv';
 export * from './lib/format';
 export * from './lib/date';
 
@@ -41,7 +42,6 @@ export {
   Countdown,
   ToastProvider,
   useToast,
-  ThemeToggle,
   type TabDef,
 } from './components/Feedback';
 

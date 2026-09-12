@@ -20,6 +20,7 @@ import type {
   AuctionBid,
   AuctionEntry,
   AuditEntry,
+  ChatMessage,
   ChatThread,
   Exhibition,
   ExhibitionApplication,
@@ -490,6 +491,7 @@ for (const plan of AUCTION_PLAN) {
       winnerBidId: null,
       createdAt: agoDays(int(2, 40)),
       myEntry: null,
+      topBid: null,
     });
 
     for (let b = 0; b < bidCount; b++) {
@@ -507,6 +509,11 @@ for (const plan of AUCTION_PLAN) {
       if (b === bidCount - 1) {
         auctions[auctions.length - 1]!.winnerBidId =
           plan.status === 'settled' || plan.status === 'defaulted' ? bidId : null;
+        // أعلى مزايد مضمّن في الصف — عشان الجدول مايعملش N+1 (§6.3)
+        auctions[auctions.length - 1]!.topBid = {
+          exhibitionName: ex.name,
+          amount: startPrice + (b + 1) * bidStep,
+        };
         if (plan.status === 'settled') ex.winsCount += 1;
       }
     }
@@ -709,6 +716,22 @@ auditLog.sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt));
 
 /* ═══════════════════════ المحادثات (استفسارات المعرض) ═══════════════════════ */
 
+const BUYER_LINES = [
+  'العربية لسه متاحة؟',
+  'آخر سعر كام؟ معايا كاش',
+  'ينفع معاينة بكرة بالليل؟',
+  'الصيانات كلها بالتوكيل؟',
+  'في إمكانية تقسيط؟',
+] as const;
+
+const EXHIBITION_LINES = [
+  'متاحة يا فندم — اتفضل في أي وقت من ١٠ الصبح لـ١٠ بالليل.',
+  'السعر اللي معروض هو آخر كلام، ومعاه فحص كامل قدامك.',
+  'اتفضل بكرة، هنجهزهالك للمعاينة والتجربة.',
+  'كل الصيانات موثّقة بالدفتر — هتشوفها بنفسك.',
+  'في تمويل عن طريق CarQ لو حابب — بنساعدك في الورق.',
+] as const;
+
 const chats: ChatThread[] = Array.from({ length: 14 }).map((_, i) => {
   const l = listings[(i * 9) % listings.length]!;
   const buyer = pick(users.filter((u) => u.role === 'individual'));
@@ -718,17 +741,42 @@ const chats: ChatThread[] = Array.from({ length: 14 }).map((_, i) => {
     withName: buyer.name,
     withPhone: buyer.phone,
     unread: i < 4 ? int(1, 3) : 0,
-    lastMessage: pick([
-      'العربية لسه متاحة؟',
-      'آخر سعر كام؟ معايا كاش',
-      'ينفع معاينة بكرة بالليل؟',
-      'الصيانات كلها بالتوكيل؟',
-      'في إمكانية تقسيط؟',
-    ]),
+    lastMessage: pick(BUYER_LINES),
     lastMessageAt: agoHours(int(1, 120)),
     messagesCount: int(2, 18),
     firstResponseMinutes: chance(0.8) ? int(3, 240) : null,
   };
+});
+
+/**
+ * رسايل كل محادثة — متولّدة متسقة مع أرقام المحادثة نفسها:
+ * أول رسالة من المشتري دايمًا، ولو `firstResponseMinutes = null`
+ * يبقى المعرض لسه مردش فكل الرسايل من المشتري. آخر رسالة هي
+ * `lastMessage` ومن المشتري لو فيه غير مقروء.
+ */
+const chatMessages: ChatMessage[] = chats.flatMap((t) => {
+  const n = Math.max(2, Math.min(t.messagesCount, 12));
+  t.messagesCount = n;
+  const end = +new Date(t.lastMessageAt);
+  const stepMs = int(25, 180) * 60_000;
+  return Array.from({ length: n }).map((_, k) => {
+    const isLast = k === n - 1;
+    const noReplyYet = t.firstResponseMinutes === null;
+    const from: ChatMessage['from'] = noReplyYet
+      ? 'buyer'
+      : isLast && t.unread > 0
+        ? 'buyer'
+        : k % 2 === 1
+          ? 'exhibition'
+          : 'buyer';
+    return {
+      id: `${t.id}-m${k + 1}`,
+      threadId: t.id,
+      from,
+      body: isLast ? t.lastMessage : from === 'buyer' ? pick(BUYER_LINES) : pick(EXHIBITION_LINES),
+      at: new Date(end - (n - 1 - k) * stepMs).toISOString(),
+    };
+  });
 });
 
 /* ═══════════════════════ التصدير ═══════════════════════ */
@@ -746,6 +794,7 @@ export const seed = {
   scanJobs,
   auditLog,
   chats,
+  chatMessages,
   listingSummary,
   toSummary,
   GOVERNORATES,

@@ -31,8 +31,19 @@ export function bidBlockCode(c: BidConditions): ErrorCode | null {
   return null;
 }
 
+/**
+ * الرسالة بالعربي زي ما المعرض هيشوفها — مش كود خام.
+ * الكود التقني موجود في tooltip للمطورين بس (قرار مالك المنتج:
+ * ممنوع أكواد إنجليزي خام في أي واجهة).
+ */
+const BLOCK_LABEL: Record<string, string> = {
+  NOT_AN_EXHIBITION: 'حسابك مش حساب معرض',
+  NOT_CONTRACTED: 'معرضك مش متعاقد',
+  ENTRY_NOT_PAID: 'رسوم دخول المزاد مش مدفوعة',
+};
+
 const BLOCK_HINT: Record<string, string> = {
-  NOT_AN_EXHIBITION: 'دور المستخدم لسه مش exhibition',
+  NOT_AN_EXHIBITION: 'دور المستخدم لسه مش «معرض»',
   NOT_CONTRACTED: 'المفتاح مقفول — التعاقد هو اللي بيفتح المزايدة',
   ENTRY_NOT_PAID: 'مدفعش رسوم دخول مزاد شغال',
 };
@@ -76,7 +87,9 @@ export function ConditionMarks({ c, className }: { c: BidConditions; className?:
       {code ? (
         <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-caption">
           <span className="text-content-faint">لو زايد دلوقتي هيشوف</span>
-          <span className="rounded-xs bg-crit-soft px-1.5 py-0.5 font-bold text-crit">{code}</span>
+          <span className="rounded-xs bg-crit-soft px-1.5 py-0.5 font-bold text-crit" title={code}>
+            «{BLOCK_LABEL[code] ?? 'المزايدة مقفولة'}»
+          </span>
           <span className="text-content-sub">{BLOCK_HINT[code]}</span>
         </p>
       ) : (

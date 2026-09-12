@@ -43,8 +43,9 @@ import {
   withThousands,
 } from '@carq/ui';
 import {
-  MOCK_NOW,
   errorMessage,
+  nowMs,
+  useCatalog,
   useDealerAuctions,
   useDeleteListing,
   useMarkListingSold,
@@ -54,19 +55,7 @@ import {
   useUpdateListing,
   useUploadListingPhoto,
 } from '@carq/api-client';
-import {
-  AREAS_BY_GOV,
-  BODIES,
-  COLORS,
-  GOVERNORATES,
-  MAKES,
-  MODELS_BY_MAKE,
-  TRANSMISSIONS,
-  kmError,
-  priceError,
-  toNumber,
-  yearError,
-} from '@/lib/catalog';
+import { TRANSMISSIONS, kmError, priceError, toNumber, yearError } from '@/lib/catalog';
 
 /**
  * ════════════════════════════════════════════════════════════════
@@ -110,6 +99,7 @@ export default function ListingDetailPage() {
   const listing = useMyListing(id);
   const leads = useMyLeads();
   const auctions = useDealerAuctions('all');
+  const catalog = useCatalog();
 
   const update = useUpdateListing();
   const markSold = useMarkListingSold();
@@ -207,9 +197,22 @@ export default function ListingDetailPage() {
     );
   }, [l, form]);
 
+  /**
+   * القوايم من الكتالوج — ولحد ما يوصل، قيمة الإعلان الحالية هي
+   * الخيار الوحيد. الفورم مش محجوب على الكتالوج: التعديل الأساسي
+   * (سعر/وصف) شغال حتى لو نداء الكتالوج اتأخر.
+   */
+  const cat = catalog.data;
+  const makeOptions = cat?.makes ?? (form ? [form.make] : []);
+  const modelOptions = form ? (cat?.modelsByMake[form.make] ?? [form.model]) : [];
+  const bodyOptions = cat?.bodies ?? (form ? [form.body] : []);
+  const colorOptions = cat?.colors ?? (form ? [form.color] : []);
+  const govOptions = cat?.governorates ?? (form ? [form.governorate] : []);
+  const areaOptions = form ? (cat?.areasByGov[form.governorate] ?? [form.area]) : [];
+
   const daysListed =
     l && l.publishedAt
-      ? Math.max(1, Math.round((MOCK_NOW - new Date(l.publishedAt).getTime()) / DAY_MS))
+      ? Math.max(1, Math.round((nowMs() - new Date(l.publishedAt).getTime()) / DAY_MS))
       : null;
 
   const gap = l && l.marketAvg !== null ? ((l.price - l.marketAvg) / l.marketAvg) * 100 : null;
@@ -353,9 +356,14 @@ export default function ListingDetailPage() {
                   <Select
                     value={form.make}
                     disabled={locked}
-                    onChange={(e) => set({ make: e.target.value, model: MODELS_BY_MAKE[e.target.value]?.[0] ?? '' })}
+                    onChange={(e) =>
+                      set({
+                        make: e.target.value,
+                        model: cat?.modelsByMake[e.target.value]?.[0] ?? '',
+                      })
+                    }
                   >
-                    {MAKES.map((m) => (
+                    {makeOptions.map((m) => (
                       <option key={m} value={m}>
                         {m}
                       </option>
@@ -369,7 +377,7 @@ export default function ListingDetailPage() {
                     disabled={locked}
                     onChange={(e) => set({ model: e.target.value })}
                   >
-                    {(MODELS_BY_MAKE[form.make] ?? [form.model]).map((m) => (
+                    {modelOptions.map((m) => (
                       <option key={m} value={m}>
                         {m}
                       </option>
@@ -438,7 +446,7 @@ export default function ListingDetailPage() {
 
                 <Field label="الفئة">
                   <Select value={form.body} onChange={(e) => set({ body: e.target.value })}>
-                    {BODIES.map((b) => (
+                    {bodyOptions.map((b) => (
                       <option key={b} value={b}>
                         {b}
                       </option>
@@ -448,7 +456,7 @@ export default function ListingDetailPage() {
 
                 <Field label="اللون">
                   <Select value={form.color} onChange={(e) => set({ color: e.target.value })}>
-                    {COLORS.map((c) => (
+                    {colorOptions.map((c) => (
                       <option key={c} value={c}>
                         {c}
                       </option>
@@ -460,10 +468,13 @@ export default function ListingDetailPage() {
                   <Select
                     value={form.governorate}
                     onChange={(e) =>
-                      set({ governorate: e.target.value, area: AREAS_BY_GOV[e.target.value]?.[0] ?? '' })
+                      set({
+                        governorate: e.target.value,
+                        area: cat?.areasByGov[e.target.value]?.[0] ?? '',
+                      })
                     }
                   >
-                    {GOVERNORATES.map((g) => (
+                    {govOptions.map((g) => (
                       <option key={g} value={g}>
                         {g}
                       </option>
@@ -473,7 +484,7 @@ export default function ListingDetailPage() {
 
                 <Field label="المنطقة">
                   <Select value={form.area} onChange={(e) => set({ area: e.target.value })}>
-                    {(AREAS_BY_GOV[form.governorate] ?? [form.area]).map((a) => (
+                    {areaOptions.map((a) => (
                       <option key={a} value={a}>
                         {a}
                       </option>
@@ -561,7 +572,8 @@ export default function ListingDetailPage() {
                     مفحوصة
                   </Badge>
                 ) : null}
-                {auction ? (
+                {auction && auction.status === 'live' ? (
+                  /* الشارة للمزاد الشغال بس — المنتهي مش بيقيّد حاجة (L-7) */
                   <Badge tone="accent" icon={<Gavel />}>
                     في مزاد
                   </Badge>

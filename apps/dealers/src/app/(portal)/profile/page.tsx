@@ -36,8 +36,7 @@ import {
   useToast,
   withThousands,
 } from '@carq/ui';
-import { errorMessage, useMyExhibition, useUpdateMyExhibition } from '@carq/api-client';
-import { AREAS_BY_GOV, GOVERNORATES } from '@/lib/catalog';
+import { errorMessage, useCatalog, useMyExhibition, useUpdateMyExhibition } from '@carq/api-client';
 
 /**
  * ════════════════════════════════════════════════════════════════
@@ -77,7 +76,16 @@ export default function ProfilePage() {
     setInspectionService(ex.inspectionService);
   }, [ex]);
 
-  const areas = useMemo(() => AREAS_BY_GOV[governorate] ?? [], [governorate]);
+  /** المحافظات والمناطق من الكتالوج — القايمة الحالية بتفضل خيار لحد ما يوصل */
+  const catalog = useCatalog();
+  const governorates = useMemo(() => {
+    const list = catalog.data?.governorates ?? [];
+    return governorate && !list.includes(governorate) ? [governorate, ...list] : list;
+  }, [catalog.data, governorate]);
+  const areas = useMemo(() => {
+    const list = catalog.data?.areasByGov[governorate] ?? [];
+    return area && !list.includes(area) ? [area, ...list] : list;
+  }, [catalog.data, governorate, area]);
 
   const nameError =
     name.trim().length > 0 && (name.trim().length < 3 || name.trim().length > 160)
@@ -243,7 +251,7 @@ export default function ProfilePage() {
                           }}
                         >
                           <option value="">اختار المحافظة</option>
-                          {GOVERNORATES.map((g) => (
+                          {governorates.map((g) => (
                             <option key={g} value={g}>
                               {g}
                             </option>

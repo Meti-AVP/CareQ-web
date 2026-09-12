@@ -34,6 +34,27 @@ npm run typecheck
 
 > على ويندوز بذاكرة محدودة: `NODE_OPTIONS=--max-old-space-size=4096` قبل الأمر.
 
+## الاختبارات — سكريبتين بيغطوا كل حاجة
+
+```bash
+npm run verify   # ١) الفحص الشامل: ESLint --fix ثم TypeScript ثم 81+ اختبار
+                 #    وحدات (قواعد البيزنس والتنسيق والأمان) ثم الفحوصات
+                 #    الثابتة (الأنماط الممنوعة) ثم بناء إنتاجي للتطبيقين.
+                 #    بيصلّح تلقائيًا اللي ينفع، وبيطبع تقرير نهائي واضح.
+
+npm run e2e          # ٢) بوت المتصفح: بيشغّل اللوحتين وبيتصرف كمستخدم حقيقي
+                     #    على كل شاشة (~97 اختبار): تنقّل، بحث، ترقيم صفحات،
+                     #    فورمات، رفع ملفات، فحص أمني (هيدرز + XSS + إخفاء
+                     #    التليفونات)، وسكرينشوتس ديسكتوب وموبايل لكل شاشة
+                     #    في e2e/screenshots/
+npm run e2e:report   # تقرير HTML تفاعلي لآخر جولة
+
+npm run test     # اختبارات الوحدات لوحدها (سريعة — تشتغل مع كل تعديل)
+npm run checks   # الفحوصات الثابتة لوحدها
+```
+
+قبل أي تسليم أو نشر: `npm run verify && npm run e2e` — لو الاتنين خضر، اتحرّك.
+
 ---
 
 ## الحالة: شغال بالكامل على موك — جاهز للربط
@@ -153,10 +174,33 @@ carq-web/
 في `docs/ADMIN_DASHBOARD_SPEC.md §6.2` و `docs/EXHIBITION_PORTAL_SPEC.md §8.2`.
 أهمها:
 
-- `GET /v1/admin/stats/*` — كل التشارتس متوقفة عليها
+- `GET /v1/admin/stats/*` — كل التشارتس متوقفة عليها. الواجهة بتستهلكها بالشكل ده:
+  - `overview` و`timeseries` و`breakdown` و`funnel` كلها بتقبل فلاتر الصفحة
+    (`days` أو `from`+`to` · `governorate` · `make`) كـquery params — §4.1.
+  - قيم `timeseries?metric=` المستخدمة: `listings_per_day` · `new_users` ·
+    `sell_now_requests` (سلسلة لكل حالة) · `financing_by_type` (مرابحة/عادي) ·
+    `auctions_created` (سلسلة لكل حالة).
+  - قيم `breakdown?dimension=` المستخدمة: `listing_status` · `governorate` ·
+    `make` · `price_band` · `auction_status` · `bids_by_exhibition` ·
+    `financing_monthly` (باكتات القسط الشهري من `quote_snapshot`) ·
+    `sellnow_value` (قيمة العروض المتصدَّرة بالحالة).
+  - `GET /v1/admin/stats/admin-activity` → `{cells: [{day, hour, count}]}`
+    بتوقيت القاهرة — الهيت ماب C-52.
 - `POST /v1/admin/exhibitions` — **مفيش endpoint بينشئ معرض أصلًا**
 - `PATCH /v1/admin/users/{id}/role` — الشرط ١ من ٣ للمزايدة
 - `GET .../id-image` — الرابط الموقّع لصور البطاقة
 - `POST /v1/exhibitions/applications` وطلبات الترقية كلها
+- `POST /v1/listings/{id}/reactivate` — رجوع «متباعة» → «نشطة» (L-13، بيبعت
+  idempotency key)
+- المحادثات (الرد من البوابة):
+  - `GET /v1/chats/{id}/messages` → `{items: [{id, threadId, from: 'exhibition'|'buyer', body, at}]}`
+  - `POST /v1/chats/{id}/messages` بجسم `{body}` + idempotency key — رد المعرض
+  - `POST /v1/chats/{id}/read` — فتح المحادثة بيصفّر عداد غير المقروء
+  - الواجهة بتعمل بولينج كل ١٠ ثواني والمحادثة مفتوحة — استبدلها بـWS لما يجهز
 - تضمين ملخص الإعلان في `GET /v1/auctions` و`GET /admin/sell-now/requests`
   (غير كده الجداول بتعمل N+1)
+- `GET /v1/me/exhibition/stats` محتاج يرجّع كمان `sold_at` لكل بيعة عشان
+  الـsparkline بتاع D-06 (متوسط أيام حتى البيع) — حاليًا بلاطة من غير اتجاه زمني
+- أكواد الأخطاء: الواجهة بتفهم الأسماء البديلة `ENTRY_UNPAID` و`SELF_BID`
+  و`AUCTION_CLOSED` جنب الأسماء الأساسية — لو الباك هيستخدم غيرها ضيفها في
+  `packages/api-client/src/types.ts`

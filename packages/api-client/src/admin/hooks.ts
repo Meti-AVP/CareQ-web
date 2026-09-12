@@ -23,6 +23,7 @@ import {
 import * as mock from '../mock/db';
 import { http, USE_MOCK, idempotencyKey } from '../client';
 import type {
+  AdminActivityCell,
   Auction,
   AuctionBid,
   AuctionEntry,
@@ -41,6 +42,7 @@ import type {
   ScanJob,
   SellNowRequest,
   SignedImageUrl,
+  StatsFilters,
   TimeseriesMetric,
   TimeseriesPoint,
   User,
@@ -51,7 +53,7 @@ import type {
 export const POLL = { queue: 20_000, health: 30_000, stats: 300_000 } as const;
 
 /** بيشغّل الموك بتأخير بسيط عشان حالات التحميل تتشاف زي الحقيقة */
-async function m<T>(fn: () => T, ms = 240): Promise<T> {
+async function m<T>(fn: () => T, ms = 120): Promise<T> {
   await mock.latency(ms);
   return fn();
 }
@@ -69,52 +71,72 @@ type Opts<T> = Omit<UseQueryOptions<T>, 'queryKey' | 'queryFn'>;
 
 /* ═══════════════════════ الإحصائيات ═══════════════════════ */
 
-export function useOverview(opts?: Opts<OverviewStats>) {
+/**
+ * فلاتر §4.1 بتتبعت query params زي ما هي — الباك بيفلتر الأرقام
+ * المشتقة من الإعلانات بـgovernorate/make وبيقصّ المدى بـdays أو from/to.
+ */
+export function useOverview(filters: StatsFilters = {}, opts?: Opts<OverviewStats>) {
   return useQuery<OverviewStats>({
-    queryKey: ['admin', 'overview'],
+    queryKey: ['admin', 'overview', filters],
     queryFn: () =>
-      USE_MOCK ? m(() => mock.getOverview()) : http<OverviewStats>('/v1/admin/stats/overview'),
+      USE_MOCK
+        ? m(() => mock.getOverview(filters))
+        : http<OverviewStats>(`/v1/admin/stats/overview${qs({ ...filters })}`),
     refetchInterval: POLL.stats,
     refetchOnWindowFocus: true,
     ...opts,
   });
 }
 
-export function useTimeseries(metric: TimeseriesMetric, days = 30) {
+export function useTimeseries(metric: TimeseriesMetric, days = 30, filters: StatsFilters = {}) {
   return useQuery<TimeseriesPoint[]>({
-    queryKey: ['admin', 'timeseries', metric, days],
+    queryKey: ['admin', 'timeseries', metric, days, filters],
     queryFn: () =>
       USE_MOCK
-        ? m(() => mock.getTimeseries(metric, days))
+        ? m(() => mock.getTimeseries(metric, days, filters))
         : http<{ points: TimeseriesPoint[] }>(
-            `/v1/admin/stats/timeseries${qs({ metric, days })}`,
+            `/v1/admin/stats/timeseries${qs({ metric, days, ...filters })}`,
           ).then((r) => r.points),
     refetchInterval: POLL.stats,
     refetchOnWindowFocus: true,
   });
 }
 
-export function useBreakdown(dimension: BreakdownDimension) {
+export function useBreakdown(dimension: BreakdownDimension, filters: StatsFilters = {}) {
   return useQuery<BreakdownBucket[]>({
-    queryKey: ['admin', 'breakdown', dimension],
+    queryKey: ['admin', 'breakdown', dimension, filters],
     queryFn: () =>
       USE_MOCK
-        ? m(() => mock.getBreakdown(dimension))
-        : http<{ buckets: BreakdownBucket[] }>(`/v1/admin/stats/breakdown${qs({ dimension })}`).then(
-            (r) => r.buckets,
+        ? m(() => mock.getBreakdown(dimension, filters))
+        : http<{ buckets: BreakdownBucket[] }>(
+            `/v1/admin/stats/breakdown${qs({ dimension, ...filters })}`,
+          ).then((r) => r.buckets),
+    refetchInterval: POLL.stats,
+  });
+}
+
+export function useFunnel(name: 'publish' | 'sell_now' | 'financing', filters: StatsFilters = {}) {
+  return useQuery({
+    queryKey: ['admin', 'funnel', name, filters],
+    queryFn: () =>
+      USE_MOCK
+        ? m(() => mock.getFunnel(name, filters))
+        : http<{ steps: Array<{ key: string; label: string; count: number }> }>(
+            `/v1/admin/stats/funnel${qs({ name, ...filters })}`,
           ),
     refetchInterval: POLL.stats,
   });
 }
 
-export function useFunnel(name: 'publish' | 'sell_now' | 'financing') {
-  return useQuery({
-    queryKey: ['admin', 'funnel', name],
+/** C-52: نشاط الأدمن يوم × ساعة — endpoint ناقص في الباك (§6.2) */
+export function useAdminActivity() {
+  return useQuery<AdminActivityCell[]>({
+    queryKey: ['admin', 'activity-heatmap'],
     queryFn: () =>
       USE_MOCK
-        ? m(() => mock.getFunnel(name))
-        : http<{ steps: Array<{ key: string; label: string; count: number }> }>(
-            `/v1/admin/stats/funnel${qs({ name })}`,
+        ? m(() => mock.getAdminActivity())
+        : http<{ cells: AdminActivityCell[] }>('/v1/admin/stats/admin-activity').then(
+            (r) => r.cells,
           ),
     refetchInterval: POLL.stats,
   });
@@ -259,7 +281,9 @@ export function useSetListingStatus() {
 
 /* ═══════════════════════ المعارض ═══════════════════════ */
 
-export function useExhibitions(query: { contracted?: boolean; verified?: boolean; q?: string } = {}) {
+export function useExhibitions(
+  query: { contracted?: boolean; verified?: boolean; q?: string; cursor?: string | null } = {},
+) {
   return useQuery<Page<Exhibition>>({
     queryKey: ['admin', 'exhibitions', query],
     queryFn: () =>
@@ -325,13 +349,15 @@ export function useExhibitionBids(exhibitionId: string) {
 
 /* ═══════════════════════ طلبات الترقية ═══════════════════════ */
 
-export function useApplications(status = 'submitted') {
+export function useApplications(status = 'submitted', cursor: string | null = null) {
   return useQuery<Page<ExhibitionApplication>>({
-    queryKey: ['admin', 'applications', status],
+    queryKey: ['admin', 'applications', status, cursor],
     queryFn: () =>
       USE_MOCK
-        ? m(() => mock.queryApplications({ status }))
-        : http<Page<ExhibitionApplication>>(`/v1/admin/exhibitions/applications${qs({ status })}`),
+        ? m(() => mock.queryApplications({ status, cursor }))
+        : http<Page<ExhibitionApplication>>(
+            `/v1/admin/exhibitions/applications${qs({ status, cursor })}`,
+          ),
     refetchInterval: POLL.queue,
   });
 }
@@ -383,13 +409,13 @@ export function useReviewApplication() {
 
 /* ═══════════════════════ المزادات ═══════════════════════ */
 
-export function useAuctions(status = 'all') {
+export function useAuctions(status = 'all', cursor: string | null = null) {
   return useQuery<Page<Auction>>({
-    queryKey: ['admin', 'auctions', status],
+    queryKey: ['admin', 'auctions', status, cursor],
     queryFn: () =>
       USE_MOCK
-        ? m(() => mock.queryAuctions({ status }))
-        : http<Page<Auction>>(`/v1/admin/auctions${qs({ status })}`),
+        ? m(() => mock.queryAuctions({ status, cursor }))
+        : http<Page<Auction>>(`/v1/admin/auctions${qs({ status, cursor })}`),
     // حالة المزاد ماينفعش تتكاش (§10.7)
     staleTime: 0,
     refetchInterval: POLL.queue,
@@ -578,20 +604,27 @@ export function useHealth() {
   });
 }
 
-export function useScanJobs(status = 'all') {
+export function useScanJobs(status = 'all', cursor: string | null = null) {
   return useQuery<Page<ScanJob>>({
-    queryKey: ['admin', 'scan-jobs', status],
+    queryKey: ['admin', 'scan-jobs', status, cursor],
     queryFn: () =>
       USE_MOCK
-        ? m(() => mock.queryScanJobs({ status }))
-        : http<Page<ScanJob>>(`/v1/admin/scan-jobs${qs({ status })}`),
+        ? m(() => mock.queryScanJobs({ status, cursor }))
+        : http<Page<ScanJob>>(`/v1/admin/scan-jobs${qs({ status, cursor })}`),
     refetchInterval: POLL.health,
   });
 }
 
 /* ═══════════════════════ التدقيق ═══════════════════════ */
 
-export function useAudit(query: { entityType?: string; entityId?: string; action?: string } = {}) {
+export function useAudit(
+  query: {
+    entityType?: string;
+    entityId?: string;
+    action?: string;
+    cursor?: string | null;
+  } = {},
+) {
   return useQuery<Page<AuditEntry>>({
     queryKey: ['admin', 'audit', query],
     queryFn: () =>

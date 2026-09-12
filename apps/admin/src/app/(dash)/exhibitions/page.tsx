@@ -87,9 +87,20 @@ export default function ExhibitionsPage() {
   const [q, setQ] = useState('');
   const [target, setTarget] = useState<Exhibition | null>(null);
 
+  /** الصفحات بالـcursor — مكدّس عشان زرار «السابق» يشتغل صح */
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [trail, setTrail] = useState<Array<string | null>>([]);
+  const resetPage = () => {
+    setCursor(null);
+    setTrail([]);
+  };
+
   // الفلترة بتحصل في السيرفر — الديباونس عشان مانرميش نداء لكل حرف
   useEffect(() => {
-    const t = setTimeout(() => setQ(search.trim()), 300);
+    const t = setTimeout(() => {
+      setQ(search.trim());
+      resetPage();
+    }, 300);
     return () => clearTimeout(t);
   }, [search]);
 
@@ -97,7 +108,14 @@ export default function ExhibitionsPage() {
     contracted: triToBool(contracted),
     verified: triToBool(verified),
     q: q || undefined,
+    cursor,
   });
+  /**
+   * عدادات البلاطات من `total` بتاع استعلامات مستقلة — مش من صفوف
+   * الصفحة الحالية. الصفحة فيها ٢٥ صف بس، والعدادات لازم تحكي الكل.
+   */
+  const contractedAll = useExhibitions({ contracted: true });
+  const uncontractedAll = useExhibitions({ contracted: false });
   /** الشرط ١: دور المستخدم — بيتقرا من المستخدمين مش من صف المعرض */
   const exhibitionUsers = useUsers({ role: 'exhibition' });
   /** الشرط ٣: رسوم دخول مدفوعة لمزاد شغال دلوقتي */
@@ -135,15 +153,16 @@ export default function ExhibitionsPage() {
     entryPaid: paidInLive.has(e.id) ? paidInLive.get(e.id)! : null,
   });
 
-  const contractedCount = rows.filter((e) => e.isContracted).length;
+  const contractedCount = contractedAll.data?.total ?? 0;
+  const uncontractedCount = uncontractedAll.data?.total ?? 0;
 
   /** عقود بتخلص خلال ٣٠ يوم — ومنهم اللي خلص فعلًا والمفتاح لسه مفتوح */
   const expiring = useMemo(
     () =>
-      rows
+      (contractedAll.data?.items ?? [])
         .filter((e) => e.isContracted && e.contractEndsAt && daysLeft(e.contractEndsAt) <= 30)
         .sort((a, b) => daysLeft(a.contractEndsAt!) - daysLeft(b.contractEndsAt!)),
-    [rows],
+    [contractedAll.data],
   );
 
   const columns: Array<Column<Exhibition>> = [
@@ -329,7 +348,7 @@ export default function ExhibitionsPage() {
           />
           <StatTile
             label="معارض مش متعاقدة"
-            value={Math.max(0, rows.length - contractedCount)}
+            value={uncontractedCount}
             tone="warn"
             icon={<Building2 />}
             hint="بيشوفوا المزاد بس المزايدة مقفولة عليهم"
@@ -404,6 +423,22 @@ export default function ExhibitionsPage() {
               : undefined
           }
           exportName="exhibitions"
+          hasMore={Boolean(exhibitions.data?.nextCursor)}
+          canPrev={trail.length > 0}
+          onNext={() => {
+            setTrail((t) => [...t, cursor]);
+            setCursor(exhibitions.data?.nextCursor ?? null);
+          }}
+          onPrev={() => {
+            const prev = trail.length ? (trail[trail.length - 1] ?? null) : null;
+            setTrail((t) => t.slice(0, -1));
+            setCursor(prev);
+          }}
+          pageInfo={
+            total
+              ? `${withThousands(trail.length * 25 + 1)} – ${withThousands(trail.length * 25 + rows.length)} من ${withThousands(total)} معرض`
+              : undefined
+          }
           toolbar={
             <div className="flex flex-1 flex-wrap items-center gap-3">
               <Input
@@ -418,7 +453,10 @@ export default function ExhibitionsPage() {
                   size="sm"
                   options={CONTRACT_FILTER}
                   value={contracted}
-                  onChange={setContracted}
+                  onChange={(v) => {
+                    setContracted(v);
+                    resetPage();
+                  }}
                 />
               </div>
               <div className="flex items-center gap-2">
@@ -427,7 +465,10 @@ export default function ExhibitionsPage() {
                   size="sm"
                   options={VERIFIED_FILTER}
                   value={verified}
-                  onChange={setVerified}
+                  onChange={(v) => {
+                    setVerified(v);
+                    resetPage();
+                  }}
                 />
               </div>
             </div>

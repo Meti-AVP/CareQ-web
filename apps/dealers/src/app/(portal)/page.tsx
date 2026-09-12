@@ -24,6 +24,7 @@ import {
   ChartFrame,
   DivergingBars,
   ErrorState,
+  HorizontalBars,
   PageHeader,
   SectionHeader,
   Sheet,
@@ -38,8 +39,8 @@ import {
   withThousands,
 } from '@carq/ui';
 import {
-  MOCK_NOW,
   errorMessage,
+  nowMs,
   useExhibitionStats,
   useMyExhibition,
   useMyLeads,
@@ -84,15 +85,16 @@ export default function DealerHomePage() {
    * الملاحظة تحت الرسم بتقول ده صراحة — الواجهة مابتدّعيش دقة مش عندها.
    */
   const viewsSeries = useMemo(() => {
+    const now = nowMs();
     const rows: Array<{ label: string; count: number }> = [];
     for (let i = 29; i >= 0; i--) {
-      const dayEnd = MOCK_NOW - i * DAY_MS;
+      const dayEnd = now - i * DAY_MS;
       let sum = 0;
       for (const l of mine) {
         if (!l.publishedAt || l.viewsCount === 0) continue;
         const published = new Date(l.publishedAt).getTime();
         if (published > dayEnd) continue;
-        const liveDays = Math.max(1, Math.round((MOCK_NOW - published) / DAY_MS));
+        const liveDays = Math.max(1, Math.round((now - published) / DAY_MS));
         sum += l.viewsCount / liveDays;
       }
       rows.push({ label: axisDayLabel(dayEnd), count: Math.round(sum) });
@@ -147,6 +149,17 @@ export default function DealerHomePage() {
     () =>
       mine.filter((l) => (l.status === 'active' || l.status === 'reserved') && l.marketAvg === null)
         .length,
+    [mine],
+  );
+
+  /** D-02 — أعلى ١٠ عربيات مشاهدة */
+  const topViewed = useMemo(
+    () =>
+      [...mine]
+        .filter((l) => l.viewsCount > 0)
+        .sort((a, b) => b.viewsCount - a.viewsCount)
+        .slice(0, 10)
+        .map((l) => ({ label: `${l.title} ${l.year}`, value: l.viewsCount })),
     [mine],
   );
 
@@ -309,6 +322,7 @@ export default function DealerHomePage() {
               href="/billing"
             />
             {s && s.avgDaysToSell !== null ? (
+              /* D-06: بلاطة — الاتجاه الزمني (sparkline) محتاج sold_at من الباك */
               <StatTile
                 label="متوسط أيام حتى البيع"
                 value={s.avgDaysToSell}
@@ -377,29 +391,49 @@ export default function DealerHomePage() {
           </ChartFrame>
         </div>
 
-        {/* ───── D-05: أنفع رسم للمعرض ───── */}
-        <ChartFrame
-          code="D-05"
-          title="تسعيري مقابل السوق"
-          hint="أعلى ١٠ عربيات فرقها عن متوسط السوق — تيل تحت السوق، برتقالي فوقه"
-          height={320}
-          loading={listings.isLoading}
-          error={listingsError}
-          isEmpty={!listings.isLoading && priceVsMarket.length === 0}
-          footnote={
-            unpricedCount > 0
-              ? `مستبعد ${withThousands(unpricedCount)} عربية لسه «مش متسعّرة» — محرك التسعير لسه مامعاهوش مقارنات كفاية ليها. متحسبهاش صفر ولا «في السعر».`
-              : 'كل عربياتك المعروضة عندها متوسط سوق.'
-          }
-          tableColumns={[
-            { key: 'label', label: 'العربية' },
-            { key: 'value', label: 'الفرق ٪' },
-          ]}
-          tableRows={priceVsMarket.map((r) => ({ label: r.label, value: Math.round(r.value) }))}
-          className="mb-4"
-        >
-          <DivergingBars data={priceVsMarket} height={320} maxLabelWidth={150} />
-        </ChartFrame>
+        {/* ───── D-05 (أنفع رسم للمعرض) + D-02 ───── */}
+        <div className="mb-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
+          <ChartFrame
+            code="D-05"
+            title="تسعيري مقابل السوق"
+            hint="أعلى ١٠ عربيات فرقها عن متوسط السوق — تيل تحت السوق، برتقالي فوقه"
+            height={320}
+            loading={listings.isLoading}
+            error={listingsError}
+            onRetry={() => listings.refetch()}
+            isEmpty={!listings.isLoading && priceVsMarket.length === 0}
+            footnote={
+              unpricedCount > 0
+                ? `مستبعد ${withThousands(unpricedCount)} عربية لسه «مش متسعّرة» — محرك التسعير لسه مامعاهوش مقارنات كفاية ليها. متحسبهاش صفر ولا «في السعر».`
+                : 'كل عربياتك المعروضة عندها متوسط سوق.'
+            }
+            tableColumns={[
+              { key: 'label', label: 'العربية' },
+              { key: 'value', label: 'الفرق ٪' },
+            ]}
+            tableRows={priceVsMarket.map((r) => ({ label: r.label, value: Math.round(r.value) }))}
+          >
+            <DivergingBars data={priceVsMarket} height={320} maxLabelWidth={150} />
+          </ChartFrame>
+
+          <ChartFrame
+            code="D-02"
+            title="أداء العربيات"
+            hint="أعلى ١٠ عربيات مشاهدة — دي اللي السوق واقف عندها"
+            height={320}
+            loading={listings.isLoading}
+            error={listingsError}
+            onRetry={() => listings.refetch()}
+            isEmpty={!listings.isLoading && topViewed.length === 0}
+            tableColumns={[
+              { key: 'label', label: 'العربية' },
+              { key: 'value', label: 'مشاهدات' },
+            ]}
+            tableRows={topViewed}
+          >
+            <HorizontalBars data={topViewed} height={320} unit="مشاهدة" maxLabelWidth={150} />
+          </ChartFrame>
+        </div>
 
         {/* ───── تذكير بالخطوة اللي بعدها ───── */}
         <Card className="mt-6 border-accent/25 bg-accent-soft/50">

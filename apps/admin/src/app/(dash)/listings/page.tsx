@@ -175,7 +175,8 @@ export default function ListingsPage() {
 
   const rows = listings.data?.items ?? [];
   const total = listings.data?.total ?? 0;
-  const start = Number(cursor ?? 0);
+  /** بداية الصفحة من عمق المكدس — الـcursor الحقيقي غامق ومايتفسّرش كرقم */
+  const start = trail.length * 25;
 
   const counts = overview.data?.listings;
   const tabs: TabDef[] = useMemo(() => {
@@ -278,7 +279,8 @@ export default function ListingsPage() {
       align: 'end',
       sortable: true,
       hideBelow: 'lg',
-      value: (l) => l.marketAvg ?? 0,
+      // null مش صفر: «مش متسعّر» بييجي آخر الترتيب مش وسط الأرخص (P-4)
+      value: (l) => l.marketAvg,
       render: (l) =>
         l.marketAvg === null ? (
           // لا صفر ولا مخفي — شارة صريحة (P-4)

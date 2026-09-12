@@ -99,11 +99,44 @@ interface BaseProps {
 }
 
 const AXIS = {
-  tick: { fill: chartVars.label, fontSize: 11 },
+  tick: { fill: chartVars.label, fontSize: 12 },
   tickLine: false,
   axisLine: { stroke: chartVars.grid },
   stroke: chartVars.grid,
 } as const;
+
+/**
+ * تكات المحور الصادي (orientation="right") في مستند RTL:
+ * الـSVG بيورث اتجاه الصفحة، فـ`start` بيمد النص **شمال** نقطة الربط —
+ * جوه الرسمة فوق الأعمدة. `end` في RTL بيمد يمين، فالنص بيملأ العمود
+ * المحجوز ليه بره الرسمة. (اللوحتين دايمًا RTL — مواصفة §8.)
+ */
+const Y_TICK = { fill: chartVars.label, fontSize: 12, textAnchor: 'end' } as const;
+const Y_TICK_CATEGORY = { fill: chartVars.label, fontSize: 13, textAnchor: 'end' } as const;
+
+/**
+ * أنيميشن recharts متقفول في كل الرسوم:
+ * ١) أخف — الداشبورد فيها رسوم كتير وإعادة الرسم المتحركة بتتقّل الصفحة
+ * ٢) أي resize بيعيد الأنيميشن من الصفر — كان بيسبب رسوم فاضية في
+ *    سكرينشوتات fullPage ووميض عند تغيير مقاس النافذة
+ * (حركة الدخول للكروت نفسها CSS رخيصة وشغالة عادي.)
+ */
+const NO_ANIM = { isAnimationActive: false } as const;
+
+/**
+ * عرض عمود أسماء الفئات محسوب من أطول اسم فعلًا — مش رقم ثابت.
+ * الأسماء العربية الطويلة («الإسكندرية»، «فولكس فاجن جولف») كانت
+ * بتتقطع لما العرض الثابت يضيق عنها.
+ */
+function labelColWidth(
+  data: Array<Record<string, string | number>>,
+  labelKey: string,
+  minWidth: number,
+): number {
+  const longest = data.reduce((m, row) => Math.max(m, String(row[labelKey] ?? '').length), 0);
+  // ~٧.٥px متوسط عرض الحرف العربي على مقاس 13px + هامش
+  return Math.min(210, Math.max(minWidth, Math.round(longest * 7.5) + 14));
+}
 
 /* ═══════════════════════ ١) سلسلة زمنية — خط ═══════════════════════ */
 
@@ -141,7 +174,7 @@ export function TimeSeriesLine({
         </defs>
         <CartesianGrid stroke={chartVars.grid} vertical={false} />
         <XAxis dataKey={xKey} {...AXIS} minTickGap={24} />
-        <YAxis {...AXIS} orientation="right" tickFormatter={numberFmt} width={52} />
+        <YAxis {...AXIS} tick={Y_TICK} orientation="right" tickFormatter={numberFmt} width={52} />
         <Tooltip
           content={makeTooltip(unit)}
           cursor={{ stroke: chartVars.axis, strokeWidth: 1, strokeDasharray: '3 3' }}
@@ -150,6 +183,7 @@ export function TimeSeriesLine({
           area ? (
             <Area
               key={s.key}
+              {...NO_ANIM}
               type={step ? 'stepAfter' : 'monotone'}
               dataKey={s.key}
               name={s.label}
@@ -163,6 +197,7 @@ export function TimeSeriesLine({
           ) : (
             <Line
               key={s.key}
+              {...NO_ANIM}
               type={step ? 'stepAfter' : 'monotone'}
               dataKey={s.key}
               name={s.label}
@@ -210,9 +245,11 @@ export function VerticalBars({
     <ResponsiveContainer width="100%" height={height}>
       <RBarChart data={rows} margin={{ top: 8, right: 8, left: 8, bottom: 4 }} barCategoryGap="22%">
         <CartesianGrid stroke={chartVars.grid} vertical={false} />
-        <XAxis dataKey={xKey} {...AXIS} interval={0} />
+        {/* minTickGap بيمنع تكدّس أسماء الفئات لما يكتروا — بيتشال منهم بدل ما يتراكبوا */}
+        <XAxis dataKey={xKey} {...AXIS} interval="equidistantPreserveStart" minTickGap={10} />
         <YAxis
           {...AXIS}
+          tick={Y_TICK}
           orientation="right"
           width={52}
           tickFormatter={percent ? (v: number) => `${Math.round(v)}٪` : numberFmt}
@@ -222,6 +259,7 @@ export function VerticalBars({
         {series.map((s, i) => (
           <Bar
             key={s.key}
+            {...NO_ANIM}
             dataKey={s.key}
             name={s.label}
             stackId={stacked || percent ? 'a' : undefined}
@@ -283,12 +321,12 @@ export function HorizontalBars({
           dataKey={labelKey}
           {...AXIS}
           orientation="right"
-          width={maxLabelWidth}
+          width={labelColWidth(data, labelKey, maxLabelWidth)}
           interval={0}
-          tick={{ fill: chartVars.label, fontSize: 12, textAnchor: 'start' }}
+          tick={Y_TICK_CATEGORY}
         />
         <Tooltip content={makeTooltip(unit)} cursor={{ fill: 'rgba(19,26,46,0.04)' }} />
-        <Bar dataKey={valueKey} radius={[BAR_RADIUS, 0, 0, BAR_RADIUS]} name={unit ?? 'العدد'}>
+        <Bar {...NO_ANIM} dataKey={valueKey} radius={[BAR_RADIUS, 0, 0, BAR_RADIUS]} name={unit ?? 'العدد'}>
           {data.map((row, i) => (
             <Cell
               key={i}
@@ -343,14 +381,14 @@ export function DivergingBars({
           dataKey={labelKey}
           {...AXIS}
           orientation="right"
-          width={maxLabelWidth}
+          width={labelColWidth(data, labelKey, maxLabelWidth)}
           interval={0}
-          tick={{ fill: chartVars.label, fontSize: 12, textAnchor: 'start' }}
+          tick={Y_TICK_CATEGORY}
         />
         <Tooltip content={makeTooltip(unit)} cursor={{ fill: 'rgba(19,26,46,0.04)' }} />
         {/* خط الصفر بارز — هو مرجع القراءة كله */}
         <ReferenceLine x={0} stroke={chartVars.axis} strokeWidth={1.5} />
-        <Bar dataKey={valueKey} name="الفرق" radius={BAR_RADIUS}>
+        <Bar {...NO_ANIM} dataKey={valueKey} name="الفرق" radius={BAR_RADIUS}>
           {data.map((row, i) => (
             <Cell key={i} fill={divergingColor(Number(row[valueKey] ?? 0), max)} />
           ))}
@@ -379,10 +417,12 @@ export function Histogram({
     <ResponsiveContainer width="100%" height={height}>
       <RBarChart data={data} margin={{ top: 8, right: 8, left: 8, bottom: 4 }} barCategoryGap="8%">
         <CartesianGrid stroke={chartVars.grid} vertical={false} />
-        <XAxis dataKey={labelKey} {...AXIS} interval="preserveStartEnd" />
-        <YAxis {...AXIS} orientation="right" width={52} tickFormatter={numberFmt} />
+        {/* الباكتات كتير والأسماء طويلة — بنعرض عيّنة متباعدة بدل التراكب */}
+        <XAxis dataKey={labelKey} {...AXIS} interval="equidistantPreserveStart" minTickGap={14} />
+        <YAxis {...AXIS} tick={Y_TICK} orientation="right" width={52} tickFormatter={numberFmt} />
         <Tooltip content={makeTooltip(unit)} cursor={{ fill: 'rgba(19,26,46,0.04)' }} />
         <Bar
+          {...NO_ANIM}
           dataKey={valueKey}
           name="العدد"
           fill={color ?? seriesColor(1)}
@@ -488,6 +528,7 @@ export function ScatterPlot({
           type="number"
           dataKey="y"
           {...AXIS}
+          tick={Y_TICK}
           orientation="right"
           width={56}
           tickFormatter={yFormat}
@@ -512,7 +553,7 @@ export function ScatterPlot({
             );
           }}
         />
-        <Scatter data={points} fillOpacity={0.75}>
+        <Scatter {...NO_ANIM} data={points} fillOpacity={0.75}>
           {points.map((p, i) => (
             <Cell key={i} fill={p.color ?? seriesColor(0)} />
           ))}

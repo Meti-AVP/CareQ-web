@@ -24,25 +24,33 @@ import {
   Button,
   Card,
   DataTable,
+  ErrorState,
   FileDrop,
   PageHeader,
   SectionHeader,
   Select,
   Sheet,
+  Skeleton,
   useToast,
   formatEGP,
   withThousands,
   type Column,
 } from '@carq/ui';
-import { errorMessage, useBulkCreate, useMyListings } from '@carq/api-client';
 import {
-  AREAS_BY_GOV,
-  BODIES,
-  COLORS,
-  GOVERNORATES,
-  MAKES,
-  MODELS_BY_MAKE,
+  errorMessage,
+  useBulkCreate,
+  useCatalog,
+  useMyListings,
+  type Catalog,
+} from '@carq/api-client';
+import {
+  KM_MAX,
+  KM_MIN,
+  PRICE_MAX,
+  PRICE_MIN,
   TRANSMISSIONS,
+  YEAR_MAX,
+  YEAR_MIN,
   resolveFrom,
   westernDigits,
 } from '@/lib/catalog';
@@ -78,13 +86,8 @@ const COLUMNS = [
 
 type ColumnKey = (typeof COLUMNS)[number];
 
-/** حدود L-3 — نفس أرقام السيرفر بالظبط */
-const PRICE_MIN = 10_000;
-const PRICE_MAX = 100_000_000;
-const YEAR_MIN = 1950;
-const YEAR_MAX = new Date().getFullYear() + 1;
-const KM_MIN = 0;
-const KM_MAX = 2_000_000;
+/** حدود L-3 من `lib/catalog` — معرّفة مرة واحدة لكل الفورمات */
+
 /** L-12: فرق العداد اللي تحته الإعلان بيعتبر تكرار محتمل */
 const DUP_KM_WINDOW = 2_000;
 
@@ -173,20 +176,20 @@ function toNumber(raw: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function buildTemplate(): string {
-  const make = MAKES[0] ?? 'تويوتا';
-  const model = MODELS_BY_MAKE[make]?.[0] ?? 'كورولا';
-  const gov = GOVERNORATES[0] ?? 'القاهرة';
-  const area = AREAS_BY_GOV[gov]?.[0] ?? '';
+function buildTemplate(catalog: Catalog): string {
+  const make = catalog.makes[0] ?? 'تويوتا';
+  const model = catalog.modelsByMake[make]?.[0] ?? 'كورولا';
+  const gov = catalog.governorates[0] ?? 'القاهرة';
+  const area = catalog.areasByGov[gov]?.[0] ?? '';
   const sample = [
     make,
     model,
     '2021',
     '740000',
     '62000',
-    TRANSMISSIONS[0],
-    BODIES[0] ?? 'سيدان',
-    COLORS[0] ?? 'أبيض',
+    TRANSMISSIONS[0]!,
+    catalog.bodies[0] ?? 'سيدان',
+    catalog.colors[0] ?? 'أبيض',
     gov,
     area,
     'فابريكا بالكامل والصيانات بالتوكيل',
@@ -207,6 +210,41 @@ const STEPS = [
 type StepKey = (typeof STEPS)[number]['key'];
 
 export default function BulkUploadPage() {
+  const catalog = useCatalog();
+
+  // التحليل كله بيتقاس على الكتالوج — مفيش معنى للشاشة قبل ما يوصل
+  if (!catalog.data) {
+    return (
+      <>
+        <PageHeader
+          title="رفع بالجملة"
+          subtitle="أربعين عربية في رفعة واحدة — تحقق كامل قبل ما يتبعت ولا صف"
+          motif="underline"
+        />
+        <Sheet>
+          {catalog.isError ? (
+            /* فشل الكتالوج بيتقال — مش سكيلتون للأبد */
+            <Card>
+              <ErrorState
+                message={errorMessage(catalog.error)}
+                onRetry={() => catalog.refetch()}
+              />
+            </Card>
+          ) : (
+            <div className="space-y-4">
+              <Skeleton className="h-24" />
+              <Skeleton className="h-64" />
+            </div>
+          )}
+        </Sheet>
+      </>
+    );
+  }
+
+  return <BulkUploadFlow catalog={catalog.data} />;
+}
+
+function BulkUploadFlow({ catalog }: { catalog: Catalog }) {
   const toast = useToast();
   const [step, setStep] = useState<StepKey>('template');
   const [fileName, setFileName] = useState<string | null>(null);
@@ -223,7 +261,7 @@ export default function BulkUploadPage() {
   /* ── الخطوة ١: القالب ── */
   const downloadTemplate = () => {
     // BOM إجباري — من غيره إكسل بيفتح العربي حروف مكسّرة
-    const blob = new Blob([`﻿${buildTemplate()}`], { type: 'text/csv;charset=utf-8;' });
+    const blob = new Blob([`﻿${buildTemplate(catalog)}`], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -263,13 +301,13 @@ export default function BulkUploadPage() {
         const makeRaw = at(cells, 'make');
         const modelRaw = at(cells, 'model');
         const govRaw = at(cells, 'governorate');
-        const make = resolveFrom(MAKES, makeRaw);
+        const make = resolveFrom(catalog.makes, makeRaw);
         return {
           index: i,
           makeRaw,
           make,
           modelRaw,
-          model: make ? resolveFrom(MODELS_BY_MAKE[make] ?? [], modelRaw) : null,
+          model: make ? resolveFrom(catalog.modelsByMake[make] ?? [], modelRaw) : null,
           year: toNumber(at(cells, 'year')),
           price: toNumber(at(cells, 'price')),
           km: toNumber(at(cells, 'km')),
@@ -277,7 +315,7 @@ export default function BulkUploadPage() {
           body: at(cells, 'body'),
           color: at(cells, 'color'),
           governorateRaw: govRaw,
-          governorate: resolveFrom(GOVERNORATES, govRaw),
+          governorate: resolveFrom(catalog.governorates, govRaw),
           area: at(cells, 'area'),
           description: at(cells, 'description'),
         };
@@ -286,7 +324,7 @@ export default function BulkUploadPage() {
       setStep('review');
     };
     reader.readAsText(file, 'utf-8');
-  }, []);
+  }, [catalog]);
 
   /* ── الخطوة ٣: التحقق ── */
   const activeMine = useMemo(
@@ -483,12 +521,12 @@ export default function BulkUploadPage() {
               const make = e.target.value;
               patchRow(r.index, {
                 make,
-                model: resolveFrom(MODELS_BY_MAKE[make] ?? [], r.modelRaw),
+                model: resolveFrom(catalog.modelsByMake[make] ?? [], r.modelRaw),
               });
             }}
           >
             <option value="">{r.makeRaw || 'اختار الماركة'}</option>
-            {MAKES.map((m) => (
+            {catalog.makes.map((m) => (
               <option key={m} value={m}>
                 {m}
               </option>
@@ -514,7 +552,7 @@ export default function BulkUploadPage() {
             onChange={(e) => patchRow(r.index, { model: e.target.value })}
           >
             <option value="">{r.modelRaw || 'اختار الموديل'}</option>
-            {(r.make ? (MODELS_BY_MAKE[r.make] ?? []) : []).map((m) => (
+            {(r.make ? (catalog.modelsByMake[r.make] ?? []) : []).map((m) => (
               <option key={m} value={m}>
                 {m}
               </option>
@@ -571,7 +609,7 @@ export default function BulkUploadPage() {
             onChange={(e) => patchRow(r.index, { governorate: e.target.value })}
           >
             <option value="">{r.governorateRaw || 'اختار المحافظة'}</option>
-            {GOVERNORATES.map((g) => (
+            {catalog.governorates.map((g) => (
               <option key={g} value={g}>
                 {g}
               </option>

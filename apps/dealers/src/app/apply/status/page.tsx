@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import Link from 'next/link';
 import {
   AlertTriangle,
@@ -24,16 +24,18 @@ import {
   Button,
   Card,
   EmptyState,
+  ErrorState,
   PageHeader,
   SectionHeader,
   SegmentedControl,
   Sheet,
+  Skeleton,
   formatDateAr,
   relTimeAr,
   secondsUntil,
   withThousands,
 } from '@carq/ui';
-import { mockDb } from '@carq/api-client';
+import { errorMessage, USE_MOCK, useMyApplication } from '@carq/api-client';
 import type { ApplicationStatus, ExhibitionApplication } from '@carq/api-client';
 
 /**
@@ -131,12 +133,16 @@ function DocsList({ app, requested = [] }: { app: ExhibitionApplication; request
 }
 
 export default function ApplyStatusPage() {
-  const [status, setStatus] = useState<ApplicationStatus>('submitted');
+  /**
+   * مبدّل الحالة للديمو بس (وضع الموك). مع الباك اند الحقيقي الحالة
+   * بتيجي من `GET /v1/exhibitions/applications/me` زي ما هي.
+   */
+  const [demoStatus, setDemoStatus] = useState<ApplicationStatus>('submitted');
+  const query = useMyApplication(USE_MOCK ? demoStatus : undefined);
+  const app = query.data;
 
-  const app = useMemo(
-    () => mockDb.applications.find((a) => a.status === status) ?? mockDb.applications[0],
-    [status],
-  );
+  /** الشاشة المعروضة: في الموك بنتبع المبدّل، في الحقيقي بنتبع الطلب */
+  const status: ApplicationStatus = USE_MOCK ? demoStatus : (app?.status ?? 'submitted');
 
   const reapplyAt = app?.reviewedAt
     ? new Date(new Date(app.reviewedAt).getTime() + REAPPLY_DAYS * DAY_SECONDS * 1000)
@@ -165,21 +171,37 @@ export default function ApplyStatusPage() {
           </Link>
         }
       >
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="text-caption text-white/55">بدّل الحالة لمراجعة الشاشات</span>
-          <SegmentedControl
-            options={DEMO_STATES}
-            value={status}
-            onChange={setStatus}
-            size="sm"
-            className="!bg-white/10 [&_button]:text-white/70 [&_button[aria-selected=true]]:!bg-white [&_button[aria-selected=true]]:!text-ink"
-          />
-        </div>
+        {USE_MOCK ? (
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-caption text-white/55">بدّل الحالة لمراجعة الشاشات</span>
+            <SegmentedControl
+              options={DEMO_STATES}
+              value={demoStatus}
+              onChange={setDemoStatus}
+              size="sm"
+              className="!bg-white/10 [&_button]:text-white/70 [&_button[aria-selected=true]]:!bg-white [&_button[aria-selected=true]]:!text-ink"
+            />
+          </div>
+        ) : null}
       </PageHeader>
 
       <Sheet>
         <div className="mx-auto max-w-3xl space-y-4">
-          {!app ? (
+          {query.isLoading ? (
+            <>
+              <Skeleton className="h-36" />
+              <Skeleton className="h-64" />
+            </>
+          ) : null}
+
+          {/* الفشل مش «مفيش طلب» — فشل القراءة بيتقال بسببه وزرار إعادة */}
+          {!query.isLoading && query.isError ? (
+            <Card>
+              <ErrorState message={errorMessage(query.error)} onRetry={() => query.refetch()} />
+            </Card>
+          ) : null}
+
+          {!query.isLoading && !query.isError && !app ? (
             <Card padded={false}>
               <EmptyState
                 title="مفيش طلب"

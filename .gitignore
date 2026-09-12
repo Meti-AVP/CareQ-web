@@ -11,3 +11,10 @@ next-env.d.ts
 *.log
 .vercel
 .turbo
+
+# مخرجات الاختبارات — بتتولد من npm run e2e
+e2e/test-results/
+e2e/report/
+e2e/screenshots/
+playwright-report/
+test-results/

@@ -3,6 +3,7 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { BarChart3, Download, Table2 } from 'lucide-react';
 import { cn } from '../lib/cn';
+import { buildCsv, downloadCsv } from '../lib/csv';
 import { withThousands } from '../lib/format';
 import { EmptyState, ErrorState, Skeleton } from '../components/Primitives';
 
@@ -36,6 +37,8 @@ export interface ChartFrameProps {
   tableColumns?: Array<{ key: string; label: string }>;
   loading?: boolean;
   error?: string;
+  /** «حاول تاني» جوه حالة الخطأ — مرّر refetch بتاع الاستعلام */
+  onRetry?: () => void;
   /** فاضي = مفيش بيانات في الفترة، مش رسم فاضي */
   isEmpty?: boolean;
   /** بيانات قليلة (< ٣ نقط): اعرض أرقام مش خط */
@@ -56,6 +59,7 @@ export function ChartFrame({
   tableColumns,
   loading,
   error,
+  onRetry,
   isEmpty,
   sparse,
   footnote,
@@ -65,25 +69,16 @@ export function ChartFrame({
 }: ChartFrameProps) {
   const [asTable, setAsTable] = useState(false);
 
+  /** خلايا معقّمة ضد حقن المعادلات — نفس قواعد تصدير الجداول */
   const csv = useMemo(() => {
     if (!tableRows?.length || !tableColumns?.length) return '';
-    const head = tableColumns.map((c) => c.label).join(',');
-    const body = tableRows
-      .map((r) => tableColumns.map((c) => String(r[c.key] ?? '')).join(','))
-      .join('\n');
-    return `${head}\n${body}`;
+    return buildCsv(
+      tableColumns.map((c) => c.label),
+      tableRows.map((r) => tableColumns.map((c) => r[c.key] ?? '')),
+    );
   }, [tableRows, tableColumns]);
 
-  const download = () => {
-    // BOM عشان إكسل يفتح العربي صح
-    const blob = new Blob([`﻿${csv}`], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${code ? `${code}-` : ''}${title}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+  const download = () => downloadCsv(`${code ? `${code}-` : ''}${title}`, csv);
 
   const canTable = Boolean(tableRows?.length && tableColumns?.length);
   const showLegend = (series?.length ?? 0) >= 2;
@@ -148,7 +143,7 @@ export function ChartFrame({
             </div>
           </div>
         ) : error ? (
-          <ErrorState message={error} />
+          <ErrorState message={error} onRetry={onRetry} />
         ) : isEmpty ? (
           <EmptyState
             title="مفيش بيانات في الفترة دي"

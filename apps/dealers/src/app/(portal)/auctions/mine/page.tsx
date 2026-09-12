@@ -318,11 +318,14 @@ export default function MyAuctionsPage() {
   const d12Average = d12.length ? d12.reduce((s, r) => s + r.value, 0) / d12.length : 0;
 
   const loading = auctionsQ.isLoading || myBidsQ.isLoading || entriesQ.isLoading;
+  // فشل أي من التلات نداءات بيتقال — «دخلت؟ دفعت؟» جاي من entries تحديدًا
   const error = auctionsQ.isError
     ? errorMessage(auctionsQ.error)
     : myBidsQ.isError
       ? errorMessage(myBidsQ.error)
-      : undefined;
+      : entriesQ.isError
+        ? errorMessage(entriesQ.error)
+        : undefined;
 
   const unpaidCount = entries.filter((e) => e.paidAt === null).length;
 

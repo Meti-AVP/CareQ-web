@@ -17,6 +17,7 @@ import {
   Banner,
   Button,
   Card,
+  ErrorState,
   Field,
   FileDrop,
   Input,
@@ -24,20 +25,21 @@ import {
   SectionHeader,
   Select,
   Sheet,
+  Skeleton,
   Textarea,
   formatEGP,
   useToast,
   withThousands,
 } from '@carq/ui';
-import { errorMessage, useCreateListing, useUploadListingPhoto } from '@carq/api-client';
 import {
-  AREAS_BY_GOV,
-  BODIES,
-  COLORS,
-  GOVERNORATES,
+  errorMessage,
+  useCatalog,
+  useCreateListing,
+  useUploadListingPhoto,
+  type Catalog,
+} from '@carq/api-client';
+import {
   KM_MAX,
-  MAKES,
-  MODELS_BY_MAKE,
   PRICE_MAX,
   PRICE_MIN,
   TRANSMISSIONS,
@@ -77,31 +79,70 @@ interface FormState {
   description: string;
 }
 
-const FIRST_MAKE = MAKES[0] ?? '';
-const FIRST_GOV = GOVERNORATES[0] ?? '';
-
-const INITIAL: FormState = {
-  make: FIRST_MAKE,
-  model: MODELS_BY_MAKE[FIRST_MAKE]?.[0] ?? '',
-  year: '',
-  price: '',
-  km: '',
-  transmission: TRANSMISSIONS[0]!,
-  body: BODIES[0] ?? '',
-  color: COLORS[0] ?? '',
-  governorate: FIRST_GOV,
-  area: AREAS_BY_GOV[FIRST_GOV]?.[0] ?? '',
-  description: '',
-};
+/** القيم الافتراضية من الكتالوج — أول ماركة وأول محافظة متاحين */
+function initialForm(catalog: Catalog): FormState {
+  const firstMake = catalog.makes[0] ?? '';
+  const firstGov = catalog.governorates[0] ?? '';
+  return {
+    make: firstMake,
+    model: catalog.modelsByMake[firstMake]?.[0] ?? '',
+    year: '',
+    price: '',
+    km: '',
+    transmission: TRANSMISSIONS[0]!,
+    body: catalog.bodies[0] ?? '',
+    color: catalog.colors[0] ?? '',
+    governorate: firstGov,
+    area: catalog.areasByGov[firstGov]?.[0] ?? '',
+    description: '',
+  };
+}
 
 export default function NewListingPage() {
+  const catalog = useCatalog();
+
+  // الفورم مايتبنيش قبل الكتالوج — القوايم دي هي القيم الافتراضية بتاعته
+  if (!catalog.data) {
+    return (
+      <>
+        <PageHeader
+          title="ضيف عربية"
+          subtitle="دقيقتين وتبقى العربية معروضة — المهم الصورة"
+          motif="swoosh"
+        />
+        <Sheet>
+          <div className="mx-auto max-w-3xl">
+            {catalog.isError ? (
+              /* فشل الكتالوج بيتقال — مش سكيلتون للأبد */
+              <Card>
+                <ErrorState
+                  message={errorMessage(catalog.error)}
+                  onRetry={() => catalog.refetch()}
+                />
+              </Card>
+            ) : (
+              <div className="space-y-4">
+                <Skeleton className="h-28" />
+                <Skeleton className="h-96" />
+              </div>
+            )}
+          </div>
+        </Sheet>
+      </>
+    );
+  }
+
+  return <NewListingForm catalog={catalog.data} />;
+}
+
+function NewListingForm({ catalog }: { catalog: Catalog }) {
   const router = useRouter();
   const toast = useToast();
 
   const create = useCreateListing();
   const uploadPhoto = useUploadListingPhoto();
 
-  const [form, setForm] = useState<FormState>(INITIAL);
+  const [form, setForm] = useState<FormState>(() => initialForm(catalog));
   const [touched, setTouched] = useState(false);
   const [photos, setPhotos] = useState<string[]>([]);
   const [createdId, setCreatedId] = useState<string | null>(null);
@@ -244,7 +285,7 @@ export default function NewListingPage() {
                 variant="outline"
                 icon={<Plus />}
                 onClick={() => {
-                  setForm(INITIAL);
+                  setForm(initialForm(catalog));
                   setPhotos([]);
                   setCreatedId(null);
                   setActivated(false);
@@ -301,10 +342,13 @@ export default function NewListingPage() {
                 <Select
                   value={form.make}
                   onChange={(e) =>
-                    set({ make: e.target.value, model: MODELS_BY_MAKE[e.target.value]?.[0] ?? '' })
+                    set({
+                      make: e.target.value,
+                      model: catalog.modelsByMake[e.target.value]?.[0] ?? '',
+                    })
                   }
                 >
-                  {MAKES.map((m) => (
+                  {catalog.makes.map((m) => (
                     <option key={m} value={m}>
                       {m}
                     </option>
@@ -314,7 +358,7 @@ export default function NewListingPage() {
 
               <Field label="الموديل" required>
                 <Select value={form.model} onChange={(e) => set({ model: e.target.value })}>
-                  {(MODELS_BY_MAKE[form.make] ?? []).map((m) => (
+                  {(catalog.modelsByMake[form.make] ?? []).map((m) => (
                     <option key={m} value={m}>
                       {m}
                     </option>
@@ -382,7 +426,7 @@ export default function NewListingPage() {
 
               <Field label="الفئة" required>
                 <Select value={form.body} onChange={(e) => set({ body: e.target.value })}>
-                  {BODIES.map((b) => (
+                  {catalog.bodies.map((b) => (
                     <option key={b} value={b}>
                       {b}
                     </option>
@@ -392,7 +436,7 @@ export default function NewListingPage() {
 
               <Field label="اللون" required>
                 <Select value={form.color} onChange={(e) => set({ color: e.target.value })}>
-                  {COLORS.map((c) => (
+                  {catalog.colors.map((c) => (
                     <option key={c} value={c}>
                       {c}
                     </option>
@@ -404,10 +448,13 @@ export default function NewListingPage() {
                 <Select
                   value={form.governorate}
                   onChange={(e) =>
-                    set({ governorate: e.target.value, area: AREAS_BY_GOV[e.target.value]?.[0] ?? '' })
+                    set({
+                      governorate: e.target.value,
+                      area: catalog.areasByGov[e.target.value]?.[0] ?? '',
+                    })
                   }
                 >
-                  {GOVERNORATES.map((g) => (
+                  {catalog.governorates.map((g) => (
                     <option key={g} value={g}>
                       {g}
                     </option>
@@ -417,7 +464,7 @@ export default function NewListingPage() {
 
               <Field label="المنطقة" required>
                 <Select value={form.area} onChange={(e) => set({ area: e.target.value })}>
-                  {(AREAS_BY_GOV[form.governorate] ?? []).map((a) => (
+                  {(catalog.areasByGov[form.governorate] ?? []).map((a) => (
                     <option key={a} value={a}>
                       {a}
                     </option>

@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   AlertTriangle,
   Banknote,
@@ -8,7 +9,6 @@ import {
   Car,
   EyeOff,
   Gavel,
-  ShieldCheck,
   UserPlus,
   Zap,
 } from 'lucide-react';
@@ -18,7 +18,6 @@ import {
   Card,
   ChartFrame,
   chartPalette,
-  DivergingBars,
   Funnel,
   HorizontalBars,
   Histogram,
@@ -26,6 +25,7 @@ import {
   ScatterPlot,
   SectionHeader,
   SegmentedControl,
+  Select,
   Sheet,
   StackedShare,
   StatTile,
@@ -33,18 +33,19 @@ import {
   TimeSeriesLine,
   axisDayLabel,
   compactEGP,
-  formatPctPlain,
   safeColor,
   seriesColor,
-  withThousands,
 } from '@carq/ui';
 import {
+  errorMessage,
   useBreakdown,
+  useExhibitions,
   useFunnel,
   useHealth,
+  useListings,
   useOverview,
   useTimeseries,
-  mockDb,
+  type StatsFilters,
 } from '@carq/api-client';
 
 /**
@@ -61,10 +62,11 @@ import {
  * ════════════════════════════════════════════════════════════════
  */
 
-const RANGES = [
+const RANGES: Array<{ value: number | 'custom'; label: string }> = [
   { value: 7, label: '٧ أيام' },
   { value: 30, label: '٣٠ يوم' },
   { value: 90, label: '٩٠ يوم' },
+  { value: 'custom', label: 'مخصص' },
 ];
 
 const STATUS_LABELS: Record<string, string> = {
@@ -85,18 +87,48 @@ const TAG_LABELS: Record<string, string> = {
 };
 
 export default function OverviewPage() {
-  const [days, setDays] = useState(30);
+  const router = useRouter();
 
-  const overview = useOverview();
+  /* ───── فلاتر §4.1: صف واحد بيتطبّق على الصفحة كلها ───── */
+  const [range, setRange] = useState<number | 'custom'>(30);
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [gov, setGov] = useState('all');
+  const [make, setMake] = useState('all');
+
+  const days = typeof range === 'number' ? range : 30;
+  const filters = useMemo<StatsFilters>(
+    () => ({
+      ...(range === 'custom' && from && to ? { from, to } : {}),
+      ...(gov !== 'all' ? { governorate: gov } : {}),
+      ...(make !== 'all' ? { make } : {}),
+    }),
+    [range, from, to, gov, make],
+  );
+
+  const overview = useOverview(filters);
   const health = useHealth();
-  const published = useTimeseries('listings_published', days);
-  const usersTs = useTimeseries('users_created', days);
-  const statusBreakdown = useBreakdown('listing_status');
-  const tagBreakdown = useBreakdown('price_tag');
-  const makeBreakdown = useBreakdown('make');
-  const govBreakdown = useBreakdown('governorate');
-  const priceBuckets = useBreakdown('price_bucket');
-  const publishFunnel = useFunnel('publish');
+  const published = useTimeseries('listings_published', days, filters);
+  const usersTs = useTimeseries('users_created', days, filters);
+  const statusBreakdown = useBreakdown('listing_status', filters);
+  const tagBreakdown = useBreakdown('price_tag', filters);
+  const makeBreakdown = useBreakdown('make', filters);
+  const govBreakdown = useBreakdown('governorate', filters);
+  const priceBuckets = useBreakdown('price_bucket', filters);
+  const publishFunnel = useFunnel('publish', filters);
+
+  /** خيارات الفلاتر من غير فلترة — عشان القايمة ماتضيقش على المختار */
+  const govOptions = useBreakdown('governorate');
+  const makeOptions = useBreakdown('make');
+
+  /** عيّنة الإعلانات النشطة للتشارت C-09 — من نفس API الجداول */
+  const activeSample = useListings({
+    status: 'active',
+    limit: 200,
+    ...(gov !== 'all' ? { governorate: gov } : {}),
+    ...(make !== 'all' ? { make } : {}),
+  });
+  const uncontracted = useExhibitions({ contracted: false });
 
   const o = overview.data;
   const prev = o?.previous;
@@ -118,38 +150,20 @@ export default function OverviewPage() {
   const spark = (rows: Array<{ count: number }>) => rows.slice(-12).map((r) => r.count);
 
   /** C-09: السعر × العداد ملوّن بمؤشر السعر — بيكشف الشواذ */
+  // useMemo مش رفاهية هنا: «?? []» بتعمل مصفوفة جديدة كل رندر وتكسر الـmemos اللي تحتها
+  const activeRows = useMemo(() => activeSample.data?.items ?? [], [activeSample.data]);
   const scatter = useMemo(
     () =>
-      mockDb.listings
-        .filter((l) => l.status === 'active')
-        .slice(0, 150)
-        .map((l) => ({
-          x: l.km,
-          y: l.price,
-          group: l.priceTag ? TAG_LABELS[l.priceTag] : TAG_LABELS.unpriced,
-          color: l.priceTag
-            ? { deal: safeColor(2), fair: safeColor(1), high: safeColor(0) }[l.priceTag]
-            : chartPalette.other,
-          label: `${l.title} ${l.year}`,
-        })),
-    [],
-  );
-
-  /** C-13 مصغّر: فرق سعر الإعلان عن متوسط السوق — اتجاهين حوالين صفر */
-  const priceVsMarket = useMemo(
-    () =>
-      mockDb.listings
-        .filter((l) => l.status === 'active' && l.marketAvg !== null)
-        .slice(0, 10)
-        .map((l) => ({
-          label: `${l.title} ${l.year}`,
-          value: ((l.price - l.marketAvg!) / l.marketAvg!) * 100,
-        })),
-    [],
-  );
-  const unpricedCount = useMemo(
-    () => mockDb.listings.filter((l) => l.status === 'active' && l.marketAvg === null).length,
-    [],
+      activeRows.slice(0, 150).map((l) => ({
+        x: l.km,
+        y: l.price,
+        group: l.priceTag ? TAG_LABELS[l.priceTag] : TAG_LABELS.unpriced,
+        color: l.priceTag
+          ? { deal: safeColor(2), fair: safeColor(1), high: safeColor(0) }[l.priceTag]
+          : chartPalette.other,
+        label: `${l.title} ${l.year}`,
+      })),
+    [activeRows],
   );
 
   const overdue = health.data?.overdueAuctions ?? 0;
@@ -161,17 +175,61 @@ export default function OverviewPage() {
         title="نظرة عامة"
         subtitle="صحة المنتج في لمحة — والأرقام اللي محتاجة قرار منك النهاردة"
         motif="circle"
-        actions={
-          <SegmentedControl
-            options={RANGES}
-            value={days}
-            onChange={setDays}
-            className="!bg-white/10 [&_button]:text-white/70 [&_button[aria-selected=true]]:!bg-white [&_button[aria-selected=true]]:!text-ink"
-          />
-        }
       />
 
       <Sheet>
+        {/* ───── صف الفلاتر (§4.1): بيتطبّق على الصفحة كلها مش على رسم واحد ───── */}
+        <Card padded={false} className="mb-6 flex flex-wrap items-center gap-3 px-4 py-3">
+          <SegmentedControl options={RANGES} value={range} onChange={setRange} size="sm" />
+          {range === 'custom' ? (
+            <div className="flex items-center gap-2">
+              <input
+                type="date"
+                value={from}
+                onChange={(e) => setFrom(e.target.value)}
+                aria-label="من تاريخ"
+                className="h-9 rounded-sm border border-line bg-surface-alt px-2.5 text-sub text-content outline-none focus:border-accent"
+              />
+              <span className="text-caption text-content-faint">إلى</span>
+              <input
+                type="date"
+                value={to}
+                onChange={(e) => setTo(e.target.value)}
+                aria-label="إلى تاريخ"
+                className="h-9 rounded-sm border border-line bg-surface-alt px-2.5 text-sub text-content outline-none focus:border-accent"
+              />
+            </div>
+          ) : null}
+          <div className="ms-auto flex flex-wrap items-center gap-2">
+            <Select
+              value={gov}
+              onChange={(e) => setGov(e.target.value)}
+              aria-label="فلتر المحافظة"
+              className="!h-9 w-40 !text-sub"
+            >
+              <option value="all">كل المحافظات</option>
+              {(govOptions.data ?? []).map((b) => (
+                <option key={b.key} value={b.key}>
+                  {b.key}
+                </option>
+              ))}
+            </Select>
+            <Select
+              value={make}
+              onChange={(e) => setMake(e.target.value)}
+              aria-label="فلتر الماركة"
+              className="!h-9 w-40 !text-sub"
+            >
+              <option value="all">كل الماركات</option>
+              {(makeOptions.data ?? []).map((b) => (
+                <option key={b.key} value={b.key}>
+                  {b.key}
+                </option>
+              ))}
+            </Select>
+          </div>
+        </Card>
+
         {/* ───── بانر العطل: بيظهر في كل الصفحات لو الـworker واقف (§4.8) ───── */}
         {workerDown || overdue > 0 ? (
           <Banner
@@ -183,7 +241,7 @@ export default function OverviewPage() {
                 : 'العامل الخلفي واقف'
             }
             action={
-              <Button variant="danger" size="sm" onClick={() => (window.location.href = '/health')}>
+              <Button variant="danger" size="sm" onClick={() => router.push('/health')}>
                 افتح لوحة الصحة
               </Button>
             }
@@ -207,12 +265,14 @@ export default function OverviewPage() {
             spark={spark(publishedRows)}
             icon={<Car />}
             href="/listings?status=active"
+            loading={overview.isLoading}
           />
           <StatTile
             label="إعلانات جديدة (٧ أيام)"
             value={publishedRows.slice(-7).reduce((s, r) => s + r.count, 0)}
             icon={<Car />}
             hint="اتنشرت في آخر أسبوع"
+            loading={published.isLoading}
           />
           <StatTile
             label="إعلانات محبوسة (مسودة)"
@@ -221,6 +281,7 @@ export default function OverviewPage() {
             icon={<EyeOff />}
             hint="من غير صور = محدش شايفها. رقم عالي معناه رفع الصور باظ."
             href="/listings?status=draft"
+            loading={overview.isLoading}
           />
           <StatTile
             label="مستخدمين جدد (٧ أيام)"
@@ -228,6 +289,7 @@ export default function OverviewPage() {
             previous={prev?.users.new}
             icon={<UserPlus />}
             spark={cumulativeUsers.slice(-12).map((r) => r.count)}
+            loading={overview.isLoading}
           />
 
           <StatTile
@@ -238,6 +300,7 @@ export default function OverviewPage() {
             icon={<Zap />}
             hint="طلبات بيع حالًا فوق ١٫٥ مليون — مستنية عرض منك"
             href="/sell-now"
+            loading={overview.isLoading}
           />
           <StatTile
             label="طلبات بيع حالًا مفتوحة"
@@ -245,6 +308,7 @@ export default function OverviewPage() {
             previous={(prev?.sellNow.pending ?? 0) + (prev?.sellNow.offered ?? 0)}
             icon={<Zap />}
             href="/sell-now?status=offered"
+            loading={overview.isLoading}
           />
           <StatTile
             label="مزادات شغالة"
@@ -253,6 +317,7 @@ export default function OverviewPage() {
             tone={overdue > 0 ? 'crit' : 'neutral'}
             hint={overdue > 0 ? `منهم ${overdue} متأخر عن القفل` : undefined}
             href="/auctions?status=live"
+            loading={overview.isLoading}
           />
           <StatTile
             label="طلبات تمويل جديدة"
@@ -260,6 +325,7 @@ export default function OverviewPage() {
             previous={prev?.financing.submitted}
             icon={<Banknote />}
             href="/financing"
+            loading={overview.isLoading}
           />
         </div>
 
@@ -270,6 +336,8 @@ export default function OverviewPage() {
             title="إعلانات منشورة / يوم"
             hint="تغيّر على الوقت — سلسلة واحدة فمفيش legend"
             loading={published.isLoading}
+            error={published.isError ? errorMessage(published.error) : undefined}
+            onRetry={() => published.refetch()}
             isEmpty={!published.isLoading && publishedRows.every((r) => r.count === 0)}
             tableColumns={[
               { key: 'label', label: 'اليوم' },
@@ -289,6 +357,8 @@ export default function OverviewPage() {
             title="مستخدمين جدد — تراكمي"
             hint="النمو التراكمي أوضح كمساحة"
             loading={usersTs.isLoading}
+            error={usersTs.isError ? errorMessage(usersTs.error) : undefined}
+            onRetry={() => usersTs.refetch()}
             isEmpty={!usersTs.isLoading && cumulativeUsers.length === 0}
             tableColumns={[
               { key: 'label', label: 'اليوم' },
@@ -312,6 +382,8 @@ export default function OverviewPage() {
             title="مؤشر السعر العادل"
             hint="شريحة «مش متسعّر» ظاهرة صراحة — إخفاؤها بيخبّي البداية الباردة"
             loading={tagBreakdown.isLoading}
+            error={tagBreakdown.isError ? errorMessage(tagBreakdown.error) : undefined}
+            onRetry={() => tagBreakdown.refetch()}
             isEmpty={!tagBreakdown.isLoading && (tagBreakdown.data?.length ?? 0) === 0}
             height={120}
             tableColumns={[
@@ -341,6 +413,8 @@ export default function OverviewPage() {
             title="توزيع حالات الإعلانات"
             hint="٧ حالات بأسماء عربية — الشريط الأفقي هو الشكل الصح"
             loading={statusBreakdown.isLoading}
+            error={statusBreakdown.isError ? errorMessage(statusBreakdown.error) : undefined}
+            onRetry={() => statusBreakdown.refetch()}
             isEmpty={!statusBreakdown.isLoading && (statusBreakdown.data?.length ?? 0) === 0}
             tableColumns={[
               { key: 'label', label: 'الحالة' },
@@ -372,6 +446,8 @@ export default function OverviewPage() {
             title="قمع النشر"
             hint="بيوري بالظبط فين الناس بتقع"
             loading={publishFunnel.isLoading}
+            error={publishFunnel.isError ? errorMessage(publishFunnel.error) : undefined}
+            onRetry={() => publishFunnel.refetch()}
             isEmpty={!publishFunnel.isLoading && (publishFunnel.data?.steps.length ?? 0) === 0}
             height={300}
             tableColumns={[
@@ -397,6 +473,8 @@ export default function OverviewPage() {
             code="C-05"
             title="أعلى ١٠ ماركات"
             loading={makeBreakdown.isLoading}
+            error={makeBreakdown.isError ? errorMessage(makeBreakdown.error) : undefined}
+            onRetry={() => makeBreakdown.refetch()}
             isEmpty={!makeBreakdown.isLoading && (makeBreakdown.data?.length ?? 0) === 0}
             height={300}
             tableColumns={[
@@ -426,6 +504,8 @@ export default function OverviewPage() {
             code="C-06"
             title="التوزيع الجغرافي"
             loading={govBreakdown.isLoading}
+            error={govBreakdown.isError ? errorMessage(govBreakdown.error) : undefined}
+            onRetry={() => govBreakdown.refetch()}
             isEmpty={!govBreakdown.isLoading && (govBreakdown.data?.length ?? 0) === 0}
             height={280}
             tableColumns={[
@@ -450,6 +530,8 @@ export default function OverviewPage() {
             title="توزيع الأسعار"
             hint="شكل السوق — مش متوسطه"
             loading={priceBuckets.isLoading}
+            error={priceBuckets.isError ? errorMessage(priceBuckets.error) : undefined}
+            onRetry={() => priceBuckets.refetch()}
             isEmpty={!priceBuckets.isLoading && (priceBuckets.data?.length ?? 0) === 0}
             height={280}
             tableColumns={[
@@ -472,13 +554,17 @@ export default function OverviewPage() {
           </ChartFrame>
         </div>
 
-        {/* ───── الشواذ + الثقة ───── */}
-        <div className="mb-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
+        {/* ───── الشواذ (C-09) ───── */}
+        <div className="mb-4 grid grid-cols-1 gap-4">
           <ChartFrame
             code="C-09"
             title="السعر مقابل العداد"
             hint="بيكشف الشواذ والإعلانات المشبوهة — كل نقطة إعلان نشط"
             height={300}
+            loading={activeSample.isLoading}
+            error={activeSample.isError ? errorMessage(activeSample.error) : undefined}
+            onRetry={() => activeSample.refetch()}
+            isEmpty={!activeSample.isLoading && scatter.length === 0}
             series={[
               { key: 'deal', label: 'لقطة', color: safeColor(2) },
               { key: 'fair', label: 'سعر عادل', color: safeColor(1) },
@@ -501,57 +587,6 @@ export default function OverviewPage() {
               yFormat={compactEGP}
             />
           </ChartFrame>
-
-          <div className="grid grid-rows-2 gap-4">
-            <ChartFrame
-              code="C-43"
-              title="تغطية الثقة"
-              hint="٣ نسب مستقلة — مش شرايح من كل"
-              height={120}
-              loading={overview.isLoading}
-            >
-              <div className="space-y-3 pt-1">
-                {[
-                  { label: 'ممشى موثّق', v: o?.trust.kmVerifiedPct ?? 0, icon: <ShieldCheck /> },
-                  { label: 'مفحوص', v: o?.trust.inspectedPct ?? 0, icon: <ShieldCheck /> },
-                  { label: 'فيه صور', v: o?.trust.withPhotosPct ?? 0, icon: <Car /> },
-                ].map((row, i) => (
-                  <div key={row.label}>
-                    <div className="mb-1 flex items-baseline justify-between">
-                      <span className="text-sub text-content-sub">{row.label}</span>
-                      <span className="tnum text-sub font-bold text-content">
-                        {formatPctPlain(row.v)}
-                      </span>
-                    </div>
-                    <div className="h-2 overflow-hidden rounded-full bg-muted-soft">
-                      <div
-                        className="h-full rounded-full transition-all duration-700"
-                        style={{ width: `${row.v}%`, backgroundColor: seriesColor(i) }}
-                      />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </ChartFrame>
-
-            <ChartFrame
-              code="C-13"
-              title="السعر مقابل متوسط السوق"
-              hint="اتجاهين حوالين صفر — تيل تحت السوق، برتقالي فوقه"
-              height={200}
-              footnote={`مستبعد ${withThousands(unpricedCount)} إعلان نشط لسه «مش متسعّر» — متحسبش صفر`}
-              tableColumns={[
-                { key: 'label', label: 'الإعلان' },
-                { key: 'value', label: 'الفرق ٪' },
-              ]}
-              tableRows={priceVsMarket.map((r) => ({
-                label: r.label,
-                value: Math.round(r.value),
-              }))}
-            >
-              <DivergingBars data={priceVsMarket} height={200} maxLabelWidth={128} />
-            </ChartFrame>
-          </div>
         </div>
 
         {/* ───── تذكير بالفيتشرز الواقفة ───── */}
@@ -561,19 +596,18 @@ export default function OverviewPage() {
               <p className="text-title text-content">قرارات مستنياك</p>
               <p className="mt-1 text-sub text-content-sub">
                 {o?.sellNow.pending ?? 0} طلب بيع حالًا مستني عرض ·{' '}
-                {mockDb.exhibitions.filter((e) => !e.isContracted).length} معرض مش متعاقد (مش قادر
-                يزايد)
+                {uncontracted.data?.total ?? 0} معرض مش متعاقد (مش قادر يزايد)
               </p>
             </div>
             <div className="flex gap-2">
-              <Button variant="ink" size="sm" icon={<Zap />} onClick={() => (window.location.href = '/sell-now')}>
+              <Button variant="ink" size="sm" icon={<Zap />} onClick={() => router.push('/sell-now')}>
                 طابور بيع حالًا
               </Button>
               <Button
                 variant="outline"
                 size="sm"
                 icon={<Building2 />}
-                onClick={() => (window.location.href = '/exhibitions')}
+                onClick={() => router.push('/exhibitions')}
               >
                 المعارض
               </Button>

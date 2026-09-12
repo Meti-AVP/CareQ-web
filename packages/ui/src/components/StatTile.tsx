@@ -58,6 +58,8 @@ export function StatTile({
   alertWhenPositive = false,
   format = withThousands,
   suffix,
+  /** وانت مستني الداتا: سكيلتون مش صفر — الصفر بيتقري «فاضي» وده كدب */
+  loading = false,
   onClick,
   className,
 }: {
@@ -72,6 +74,7 @@ export function StatTile({
   alertWhenPositive?: boolean;
   format?: (n: number) => string;
   suffix?: string;
+  loading?: boolean;
   onClick?: () => void;
   className?: string;
 }) {
@@ -121,12 +124,16 @@ export function StatTile({
 
       <div className="mt-2 flex items-end justify-between gap-3">
         <div className="min-w-0">
-          <div className={cn('text-h1 leading-none', valueColor)}>
-            <Ticker value={value} format={format} />
-            {suffix ? <span className="text-h2 opacity-70"> {suffix}</span> : null}
-          </div>
+          {loading ? (
+            <div className="h-8 w-20 animate-pulse rounded-sm bg-muted-soft" aria-hidden="true" />
+          ) : (
+            <div className={cn('text-h1 leading-none', valueColor)}>
+              <Ticker value={value} format={format} />
+              {suffix ? <span className="text-h2 opacity-70"> {suffix}</span> : null}
+            </div>
+          )}
 
-          {delta !== undefined ? (
+          {loading ? null : delta !== undefined ? (
             <div
               className={cn(
                 'mt-2 inline-flex items-center gap-1 text-caption font-bold',
@@ -148,7 +155,9 @@ export function StatTile({
           ) : null}
         </div>
 
-        {spark && spark.length > 1 ? <Sparkline points={spark} tone={effectiveTone} /> : null}
+        {!loading && spark && spark.length > 1 ? (
+          <Sparkline points={spark} tone={effectiveTone} />
+        ) : null}
       </div>
     </Tag>
   );

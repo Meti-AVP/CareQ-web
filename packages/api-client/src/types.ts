@@ -50,7 +50,11 @@ export type ErrorCode =
   | 'AUCTION_NOT_LIVE'
   | 'AUCTION_ENDED'
   | 'BID_TOO_LOW'
-  | 'BID_NOT_ON_STEP';
+  | 'BID_NOT_ON_STEP'
+  /* أسماء بديلة بتيجي من الباك الحقيقي — نفس المعنى، بنعاملها زي مرادفها */
+  | 'ENTRY_UNPAID'
+  | 'SELF_BID'
+  | 'AUCTION_CLOSED';
 
 /* ═══════════════════════ المستخدمين ═══════════════════════ */
 
@@ -270,6 +274,11 @@ export interface Auction {
   createdAt: string;
   /** حالة دخول المعرض الحالي — null يعني مش مسجّل */
   myEntry: { id: string; paid: boolean } | null;
+  /**
+   * أعلى مزايد حاليًا — **لازم الباك يضمّنه في رد القايمة** (§6.3 · §8.3)
+   * وإلا جدول ٢٠ مزاد هيعمل ٢٠ نداء إضافي (N+1). null = لسه مفيش مزايدات.
+   */
+  topBid: { exhibitionName: string; amount: number } | null;
 }
 
 export interface AuctionBid {
@@ -358,6 +367,16 @@ export interface ChatThread {
   messagesCount: number;
   /** زمن أول رد — مؤشر خدمة للمعرض */
   firstResponseMinutes: number | null;
+}
+
+/** رسالة واحدة جوه محادثة — بترجع من GET /v1/chats/{id}/messages */
+export interface ChatMessage {
+  id: string;
+  threadId: string;
+  /** exhibition = المعرض (أنا) · buyer = المستفسر */
+  from: 'exhibition' | 'buyer';
+  body: string;
+  at: string;
 }
 
 /* ═══════════════════════ صحة النظام ═══════════════════════ */
@@ -450,7 +469,34 @@ export type TimeseriesMetric =
   | 'auction_bids'
   | 'chat_messages'
   | 'financing_applications'
+  /** C-33: سلسلتين — مرابحة وعادي (من `islamic`) */
+  | 'financing_by_type'
+  /** C-20: سلسلة لكل حالة مزاد (من `created_at` × `status`) */
+  | 'auctions_created'
   | 'scan_jobs';
+
+/**
+ * فلاتر الإحصائيات — نفس صف الفلاتر اللي فوق النظرة العامة (§4.1):
+ * «الفلتر بيتطبّق على الصفحة كلها». بتتبعت query params للباك:
+ * `GET /v1/admin/stats/*?days=30&governorate=القاهرة&make=تويوتا`
+ * والباك بيفلتر بيها الأرقام المشتقة من الإعلانات.
+ */
+export interface StatsFilters {
+  days?: number;
+  /** المدى المخصص — لو موجود بياخد أولوية على days */
+  from?: string;
+  to?: string;
+  governorate?: string;
+  make?: string;
+}
+
+/** خلية واحدة في heatmap نشاط الأدمن (C-52) — يوم أسبوع × ساعة */
+export interface AdminActivityCell {
+  /** 0 = الأحد … 6 = السبت (بتوقيت القاهرة) */
+  day: number;
+  hour: number;
+  count: number;
+}
 
 /** الأيام الفاضية بترجع بصفر، **مش محذوفة** — غير كده الخط بيكدب (§6.2) */
 export interface TimeseriesPoint {
@@ -467,7 +513,15 @@ export type BreakdownDimension =
   | 'transmission'
   | 'price_bucket'
   | 'term_months'
-  | 'down_tier';
+  | 'down_tier'
+  /** C-24: عدد المزادات بالحالة — منه بيتحسب معدل النجاح */
+  | 'auction_status'
+  /** C-23: عدد المزايدات لكل معرض — المفتاح اسم المعرض */
+  | 'bids_by_exhibition'
+  /** C-34: القسط الشهري من الـsnapshot في شرايح ٢٬٠٠٠ ج.م */
+  | 'financing_monthly'
+  /** C-14: عدد وقيمة عروض بيع حالًا بالحالة — value = مجموع `offer_price` */
+  | 'sellnow_value';
 
 export interface BreakdownBucket {
   key: string;
@@ -492,6 +546,23 @@ export interface AuthSession {
   /** ١٥ دقيقة — في الذاكرة بس، مش localStorage (§2 · §10) */
   accessToken: string;
   expiresAt: number;
+}
+
+/* ═══════════════════════ الكتالوج ═══════════════════════ */
+
+/**
+ * كتالوج الماركات والمحافظات — من `GET /v1/catalog/*` (§8.1).
+ * بيتقرا مرة ويتكاش طويل: الكتالوج بيتغيّر نادر، عكس أي حاجة
+ * تخص المزايدة. القوايم دي هي مرجع «التحليل» في الرفع بالجملة:
+ * الماركة اللي مش فيها بتتعلّم أصفر، مش بتتخمّن.
+ */
+export interface Catalog {
+  makes: string[];
+  modelsByMake: Record<string, string[]>;
+  governorates: string[];
+  areasByGov: Record<string, string[]>;
+  bodies: string[];
+  colors: string[];
 }
 
 /* ═══════════════════════ إحصائيات المعرض ═══════════════════════ */

@@ -22,9 +22,17 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    // dir=rtl الأصلية — المتصفح بيعكس التخطيط، من غير row-reverse يدوي
-    <html lang="ar" dir="rtl" className={tajawal.variable}>
-      <body>
+    /*
+     * dir=rtl الأصلية — المتصفح بيعكس التخطيط، من غير row-reverse يدوي.
+     * translate="no": الترجمة الآلية بتعبث بنصوص الـSVG والأرقام وبتكسر
+     * الرسوم — البوابة عربية أصلًا ومفيش داعي تتترجم.
+     */
+    <html lang="ar" dir="rtl" translate="no" className={tajawal.variable}>
+      {/*
+       * suppressHydrationWarning: إضافات المتصفح (Grammarly وأمثالها)
+       * بتحقن خصائص في <body> قبل React — تحذير مزيف مش من الكود.
+       */}
+      <body suppressHydrationWarning>
         <Providers>{children}</Providers>
       </body>
     </html>

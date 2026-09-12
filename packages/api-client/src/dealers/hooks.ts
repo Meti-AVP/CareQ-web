@@ -14,16 +14,20 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as mock from '../mock/db';
 import { http, USE_MOCK, idempotencyKey } from '../client';
 import type {
+  ApplicationStatus,
   Auction,
   AuctionBid,
   AuctionEntry,
+  Catalog,
+  ChatMessage,
   ChatThread,
   Exhibition,
+  ExhibitionApplication,
   ExhibitionStats,
   Listing,
 } from '../types';
 
-async function m<T>(fn: () => T, ms = 240): Promise<T> {
+async function m<T>(fn: () => T, ms = 120): Promise<T> {
   await mock.latency(ms);
   return fn();
 }
@@ -174,6 +178,50 @@ export function useMyLeads() {
     queryFn: () =>
       USE_MOCK ? m(() => mock.getMyChats()) : http<{ items: ChatThread[] }>('/v1/chats').then((r) => r.items),
     refetchInterval: 60_000,
+  });
+}
+
+/** رسايل محادثة واحدة — بولينج قصير وهي مفتوحة لحد ما WS يتركب */
+export function useLeadMessages(threadId: string | null) {
+  return useQuery<ChatMessage[]>({
+    queryKey: ['dealer', 'lead-messages', threadId],
+    enabled: Boolean(threadId),
+    queryFn: () =>
+      USE_MOCK
+        ? m(() => mock.getThreadMessages(threadId!))
+        : http<{ items: ChatMessage[] }>(`/v1/chats/${threadId}/messages`).then((r) => r.items),
+    refetchInterval: 10_000,
+  });
+}
+
+/** فتح المحادثة بيصفّر عداد غير المقروء */
+export function useMarkLeadRead() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ threadId }: { threadId: string }) =>
+      USE_MOCK
+        ? m(() => mock.markThreadRead(threadId), 80)
+        : http<ChatThread>(`/v1/chats/${threadId}/read`, { method: 'POST' }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['dealer', 'leads'] }),
+  });
+}
+
+/** رد المعرض من البوابة — بيحدّث المحادثة ومؤشر أول رد */
+export function useSendLeadMessage() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ threadId, body }: { threadId: string; body: string }) =>
+      USE_MOCK
+        ? m(() => mock.sendChatMessage(threadId, body), 260)
+        : http<ChatMessage>(`/v1/chats/${threadId}/messages`, {
+            method: 'POST',
+            body: { body },
+            idempotency: idempotencyKey(`chat-${threadId}`),
+          }),
+    onSuccess: (_msg, { threadId }) => {
+      void qc.invalidateQueries({ queryKey: ['dealer', 'lead-messages', threadId] });
+      void qc.invalidateQueries({ queryKey: ['dealer', 'leads'] });
+    },
   });
 }
 
@@ -335,6 +383,25 @@ export function useMarkListingSold() {
   });
 }
 
+/** L-13: «اتباعت» مش قرار نهائي — بترجع نشطة بنفس بياناتها */
+export function useReactivateListing() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id }: { id: string }) =>
+      USE_MOCK
+        ? m(() => {
+            const l = mock.getListing(id);
+            if (l.status === 'sold') l.status = 'active';
+            return l;
+          }, 480)
+        : http<Listing>(`/v1/listings/${id}/reactivate`, {
+            method: 'POST',
+            idempotency: idempotencyKey(`reactivate-${id}`),
+          }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['dealer', 'listings'] }),
+  });
+}
+
 /** تجديد — TTL ٣٠ يوم جديدة من ساعة التجديد (L-6) */
 export function useRenewListing() {
   const qc = useQueryClient();
@@ -414,14 +481,61 @@ export function useCatalogMakes() {
     queryKey: ['catalog', 'makes'],
     queryFn: () =>
       USE_MOCK
-        ? m(
-            () =>
-              Array.from(new Set(mock.mockDb.listings.map((l) => l.make))).sort((a, b) =>
-                a.localeCompare(b, 'ar'),
-              ),
-            120,
-          )
+        ? m(() => mock.getCatalog().makes, 120)
         : http<{ items: string[] }>('/v1/catalog/makes').then((r) => r.items),
     staleTime: 3_600_000,
+  });
+}
+
+/**
+ * الكتالوج الكامل — ماركات وموديلاتها، محافظات ومناطقها، هياكل وألوان.
+ * مرجع الفورمات والرفع بالجملة: القيمة اللي مش في الكتالوج بتتعلّم
+ * أصفر وبتطلب اختيار، مش بتتخمّن (§4.3).
+ *
+ * في الحقيقي: `GET /v1/catalog/makes` + `/governorates` + `/filters` —
+ * الـadapter هنا هو المكان الوحيد اللي بيتظبط لو شكل الرد اختلف.
+ */
+export function useCatalog() {
+  return useQuery<Catalog>({
+    queryKey: ['catalog', 'full'],
+    queryFn: async () => {
+      if (USE_MOCK) return m(() => mock.getCatalog(), 120);
+      const [makesRes, govRes, filtersRes] = await Promise.all([
+        http<{ items: Array<{ name: string; models: string[] }> }>('/v1/catalog/makes'),
+        http<{ items: Array<{ name: string; areas: string[] }> }>('/v1/catalog/governorates'),
+        http<{ bodies: string[]; colors: string[] }>('/v1/catalog/filters'),
+      ]);
+      const modelsByMake: Record<string, string[]> = {};
+      for (const mk of makesRes.items) modelsByMake[mk.name] = mk.models;
+      const areasByGov: Record<string, string[]> = {};
+      for (const g of govRes.items) areasByGov[g.name] = g.areas;
+      return {
+        makes: makesRes.items.map((x) => x.name),
+        modelsByMake,
+        governorates: govRes.items.map((x) => x.name),
+        areasByGov,
+        bodies: filtersRes.bodies,
+        colors: filtersRes.colors,
+      };
+    },
+    staleTime: 3_600_000,
+  });
+}
+
+/* ═══════════════════════ طلب الترقية ═══════════════════════ */
+
+/**
+ * حالة طلب الترقية بتاعي — `GET /v1/exhibitions/applications/me` (§8.2).
+ * `demoStatus` بيشتغل في وضع الموك بس: بيرجّع طلب بالحالة دي عشان
+ * شاشات `/apply/status` الخمسة تتراجع من غير قرار أدمن حقيقي.
+ */
+export function useMyApplication(demoStatus?: ApplicationStatus) {
+  return useQuery<ExhibitionApplication>({
+    queryKey: ['dealer', 'application', 'me', USE_MOCK ? demoStatus : undefined],
+    queryFn: () =>
+      USE_MOCK
+        ? m(() => mock.getMyApplication(demoStatus), 180)
+        : http<ExhibitionApplication>('/v1/exhibitions/applications/me'),
+    refetchOnWindowFocus: true,
   });
 }

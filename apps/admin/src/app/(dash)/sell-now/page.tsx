@@ -13,14 +13,18 @@ import {
   DivergingBars,
   Funnel,
   Histogram,
+  HorizontalBars,
   PageHeader,
   SectionHeader,
   Sheet,
   Tabs,
+  TimeSeriesLine,
+  axisDayLabel,
   compactEGP,
   formatEGP,
   hoursSince,
   maskPhone,
+  seriesColor,
   waitingFor,
   withThousands,
   type Column,
@@ -28,10 +32,13 @@ import {
 } from '@carq/ui';
 import {
   errorMessage,
+  useBreakdown,
   useFunnel,
   usePendingCount,
   useSellNowQueue,
+  useTimeseries,
   type SellNowRequest,
+  type SellNowStatus,
 } from '@carq/api-client';
 import {
   CarThumb,
@@ -39,6 +46,7 @@ import {
   OfferDialog,
   PhoneCopy,
   StatusBadge,
+  STATUS_META,
   diffInk,
 } from './parts';
 
@@ -95,6 +103,16 @@ const EMPTY: Record<TabKey, { title: string; hint: string }> = {
   },
 };
 
+/** ترتيب حالات C-10 — دورة الحياة مش أبجدي */
+const SN_ORDER: SellNowStatus[] = [
+  'pending',
+  'offered',
+  'accepted',
+  'collected',
+  'declined',
+  'expired',
+];
+
 /** شرايح زمن الرد (C-12) — الشكل بيكشف الذيل اللي المتوسط بيخبّيه */
 const RESPONSE_BUCKETS: Array<{ label: string; max: number }> = [
   { label: 'أقل من ساعة', max: 1 },
@@ -126,6 +144,10 @@ export default function SellNowQueuePage() {
 
   const pendingCount = usePendingCount();
   const funnel = useFunnel('sell_now');
+  /** C-10: طلبات كل يوم مقسومة بالحالة — من endpoint السلاسل مش من صفحات الجدول */
+  const byDay = useTimeseries('sell_now_requests', 30);
+  /** C-14: قيمة العروض المصدَّرة بالحالة — value = مجموع offer_price */
+  const valueByStatus = useBreakdown('sellnow_value');
 
   const queues = {
     pending: qPending,
@@ -156,13 +178,18 @@ export default function SellNowQueuePage() {
    * صفوف التشارتس: اتحاد التبويبات الخمسة (كل واحد صفحة واحدة عند
    * أحجامنا الحالية) — مش تبويب «الكل» عشان ده بيتقسّم بالـcursor.
    */
+  const pendingItems = qPending.data?.items;
+  const offeredItems = qOffered.data?.items;
+  const acceptedItems = qAccepted.data?.items;
+  const collectedItems = qCollected.data?.items;
+  const closedItems = qClosed.data?.items;
   const allRows = useMemo(() => {
     const seen = new Map<string, SellNowRequest>();
-    [qPending, qOffered, qAccepted, qCollected, qClosed].forEach((q) =>
-      (q.data?.items ?? []).forEach((r) => seen.set(r.id, r)),
+    [pendingItems, offeredItems, acceptedItems, collectedItems, closedItems].forEach((items) =>
+      (items ?? []).forEach((r) => seen.set(r.id, r)),
     );
     return [...seen.values()];
-  }, [qPending.data, qOffered.data, qAccepted.data, qCollected.data, qClosed.data]);
+  }, [pendingItems, offeredItems, acceptedItems, collectedItems, closedItems]);
 
   const chartsLoading =
     qPending.isLoading ||
@@ -207,6 +234,34 @@ export default function SellNowQueuePage() {
   );
 
   const noOfferYet = allRows.filter((r) => r.offerPrice === null).length;
+
+  /** C-10: صفوف اليوم × الحالة + السلاسل بترتيب دورة الحياة */
+  const dayStatusRows = useMemo(
+    () =>
+      (byDay.data ?? []).map((p) => ({
+        label: axisDayLabel(p.t),
+        ...Object.fromEntries(SN_ORDER.map((s) => [s, p.series[s] ?? 0])),
+      })),
+    [byDay.data],
+  );
+  const daySeries = SN_ORDER.map((s, i) => ({
+    key: s,
+    label: STATUS_META[s].label,
+    color: seriesColor(i),
+  }));
+
+  /** C-14 */
+  const offerValueRows = useMemo(
+    () =>
+      (valueByStatus.data ?? [])
+        .filter((b) => (b.value ?? 0) > 0)
+        .map((b) => ({
+          label: STATUS_META[b.key as SellNowStatus]?.label ?? b.key,
+          value: b.value ?? 0,
+          count: b.count,
+        })),
+    [valueByStatus.data],
+  );
 
   /* ═══════════════════════ أعمدة الجدول ═══════════════════════ */
 
@@ -425,9 +480,7 @@ export default function SellNowQueuePage() {
           emptyTitle={EMPTY[tab].title}
           emptyHint={EMPTY[tab].hint}
           rowTone={(r) => (r.status === 'pending' && hoursSince(r.createdAt) > 24 ? 'crit' : undefined)}
-          onRowClick={(r) => {
-            window.location.href = `/sell-now/${r.id}`;
-          }}
+          onRowClick={(r) => router.push(`/sell-now/${r.id}`)}
           searchable
           searchPlaceholder="دوّر باسم العربية أو البائع…"
           exportName="sell-now"
@@ -444,7 +497,7 @@ export default function SellNowQueuePage() {
           pageInfo={`${withThousands(rows.length)} من ${withThousands(active.data?.total ?? rows.length)} طلب`}
         />
 
-        {/* ═══════════════════════ التشارتس C-11 · C-12 · C-13 ═══════════════════════ */}
+        {/* ═══════════════════════ التشارتس C-10 … C-14 ═══════════════════════ */}
         <SectionHeader
           title="صحة الفيتشر"
           hint="القمع بيقول فين الناس بتقع، والهيستوجرام بيقول إحنا بنرد بعد قد إيه"
@@ -522,6 +575,57 @@ export default function SellNowQueuePage() {
         >
           <DivergingBars data={offerVsSuggested} height={320} maxLabelWidth={150} />
         </ChartFrame>
+
+        <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
+          <ChartFrame
+            code="C-10"
+            title="الطلبات باليوم والحالة"
+            hint="مساحة مكدّسة — الإجمالي وتركيبته في رسم واحد"
+            height={280}
+            loading={byDay.isLoading}
+            error={byDay.isError ? errorMessage(byDay.error) : undefined}
+            onRetry={() => byDay.refetch()}
+            isEmpty={
+              !byDay.isLoading &&
+              dayStatusRows.every((r) => SN_ORDER.every((s) => !Number(r[s as keyof typeof r])))
+            }
+            series={daySeries}
+            tableColumns={[
+              { key: 'label', label: 'اليوم' },
+              ...daySeries.map((s) => ({ key: s.key, label: s.label })),
+            ]}
+            tableRows={dayStatusRows}
+          >
+            <TimeSeriesLine
+              data={dayStatusRows}
+              series={daySeries}
+              area
+              stacked
+              height={280}
+              unit="طلب"
+            />
+          </ChartFrame>
+
+          <ChartFrame
+            code="C-14"
+            title="قيمة العروض بالحالة"
+            hint="مجموع offer_price — فلوس مش عدد"
+            height={280}
+            loading={valueByStatus.isLoading}
+            error={valueByStatus.isError ? errorMessage(valueByStatus.error) : undefined}
+            onRetry={() => valueByStatus.refetch()}
+            isEmpty={!valueByStatus.isLoading && offerValueRows.length === 0}
+            footnote="«مستني قرارك» مش هنا — لسه مفيش عرض متصدَّر فمفيش قيمة"
+            tableColumns={[
+              { key: 'label', label: 'الحالة' },
+              { key: 'count', label: 'طلبات' },
+              { key: 'value', label: 'القيمة (ج.م)' },
+            ]}
+            tableRows={offerValueRows}
+          >
+            <HorizontalBars data={offerValueRows} height={280} unit="ج.م" maxLabelWidth={110} />
+          </ChartFrame>
+        </div>
 
         {/* ───── تذكير بمعنى القيمة المعلّقة ───── */}
         <p className="mt-6 text-caption text-content-faint">

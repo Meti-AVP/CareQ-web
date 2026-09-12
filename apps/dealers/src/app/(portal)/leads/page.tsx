@@ -1,7 +1,17 @@
 'use client';
 
-import { useMemo } from 'react';
-import { Car, Clock, Info, MessageSquareDashed, MessagesSquare, Phone, Timer } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Car,
+  Clock,
+  Info,
+  MessageSquareDashed,
+  MessagesSquare,
+  Phone,
+  Reply,
+  SendHorizontal,
+  Timer,
+} from 'lucide-react';
 import {
   Badge,
   Banner,
@@ -9,33 +19,41 @@ import {
   Card,
   ChartFrame,
   DataTable,
+  Dialog,
   Monogram,
   PageHeader,
   SectionHeader,
   Sheet,
+  Skeleton,
   StatTile,
   TimeSeriesLine,
   axisDayLabel,
   cairoDayKey,
+  cn,
   formatPhone,
   relTimeAr,
   seriesColor,
+  useToast,
   withThousands,
   type Column,
 } from '@carq/ui';
-import { errorMessage, useMyLeads } from '@carq/api-client';
-import type { ChatThread } from '@carq/api-client';
+import {
+  errorMessage,
+  useLeadMessages,
+  useMarkLeadRead,
+  useMyLeads,
+  useSendLeadMessage,
+} from '@carq/api-client';
+import type { ChatMessage, ChatThread } from '@carq/api-client';
 
 /**
  * ════════════════════════════════════════════════════════════════
  * `/leads` — الاستفسارات (EXHIBITION_PORTAL_SPEC §3 · D-04)
  *
- * الشاشة دي **مؤشرات وأرقام** — مش صندوق رسايل. عرض محتوى المحادثة
- * الكامل والرد منها خارج نطاق النسخة الأولى عن قصد: الرد بيحصل من
- * تطبيق CarQ اللي فيه إشعارات فورية، وبناء صندوق رسايل تاني في الويب
- * معناه مكانين للرد والعميل بيستنى في اللي إنت مش فاتحه.
- *
- * اللي بيفرق للمعرض هنا: مين مستني رد، وبقاله قد إيه.
+ * مؤشرات + صندوق رد كامل: المعرض بيفتح المحادثة من الجدول ويرد
+ * من غير ما يسيب الداشبورد (طلب مالك المنتج). الرد بيتزامن مع
+ * تطبيق CarQ لأن الاتنين بيكلموا نفس المحادثة على السيرفر.
+ * فتح المحادثة بيصفّر «مش مقروء»، وأول رد بيثبّت مؤشر زمن أول رد.
  * ════════════════════════════════════════════════════════════════
  */
 
@@ -56,6 +74,14 @@ function minutesLabel(m: number): string {
 export default function LeadsPage() {
   const leads = useMyLeads();
   const rows = useMemo(() => leads.data ?? [], [leads.data]);
+
+  const [openThread, setOpenThread] = useState<ChatThread | null>(null);
+  const markRead = useMarkLeadRead();
+
+  const openConversation = (t: ChatThread) => {
+    setOpenThread(t);
+    if (t.unread > 0) markRead.mutate({ threadId: t.id });
+  };
 
   const unreadTotal = rows.reduce((s, t) => s + t.unread, 0);
   const unanswered = rows.filter((t) => t.firstResponseMinutes === null).length;
@@ -186,6 +212,26 @@ export default function LeadsPage() {
         ),
       hideBelow: 'lg',
     },
+    {
+      key: 'reply',
+      header: '',
+      width: 110,
+      align: 'center',
+      value: () => '',
+      render: (t) => (
+        <Button
+          variant={t.firstResponseMinutes === null ? 'primary' : 'outline'}
+          size="sm"
+          icon={<Reply />}
+          onClick={(e) => {
+            e.stopPropagation(); // الصف نفسه بيفتح المحادثة — مانفتحهاش مرتين
+            openConversation(t);
+          }}
+        >
+          رد
+        </Button>
+      ),
+    },
   ];
 
   return (
@@ -200,11 +246,11 @@ export default function LeadsPage() {
         <Banner
           tone="neutral"
           icon={<Info />}
-          title="الرد بيحصل من تطبيق CarQ — هنا المؤشرات بس"
+          title="بترد من هنا ومن تطبيق CarQ عادي — نفس المحادثة"
           className="mb-6 animate-rise"
         >
-          عرض محتوى المحادثات الكامل والرد من الويب خارج نطاق النسخة الأولى. سيبنا الرد في مكان
-          واحد عن قصد: صندوقين للرسايل معناهم عميل بيستنى في الصندوق اللي إنت مش فاتحه.
+          افتح أي محادثة من الجدول ورد على طول. الرد بيتسجّل على نفس المحادثة اللي في التطبيق،
+          وفتحها هنا بيصفّر عداد «مش مقروء».
         </Banner>
 
         <SectionHeader title="الأرقام الأساسية" hint="آخر ١٤ يوم" />
@@ -283,12 +329,13 @@ export default function LeadsPage() {
 
         <SectionHeader
           title="المحادثات"
-          hint="مرتّبة بآخر نشاط — الصف الأصفر مستني أول رد منك"
+          hint="اضغط على أي صف تفتح المحادثة وترد — الصف الأصفر مستني أول رد منك"
         />
         <DataTable
           rows={rows}
           columns={columns}
           rowKey={(t) => t.id}
+          onRowClick={openConversation}
           loading={leads.isLoading}
           error={leads.error ? errorMessage(leads.error) : undefined}
           onRetry={() => leads.refetch()}
@@ -305,6 +352,121 @@ export default function LeadsPage() {
           rowTone={(t) => (t.firstResponseMinutes === null ? 'warn' : undefined)}
         />
       </Sheet>
+
+      <ConversationDialog thread={openThread} onClose={() => setOpenThread(null)} />
     </>
+  );
+}
+
+/* ═══════════════════════ المحادثة ═══════════════════════ */
+
+/** فقاعة رسالة — رسايلي كحلي ناحية الشمال، والمشتري رمادي ناحية اليمين (عُرف الشات العربي) */
+function Bubble({ msg }: { msg: ChatMessage }) {
+  const mine = msg.from === 'exhibition';
+  // في RTL: justify-end = شمال الشاشة (نهاية سطر القراءة)
+  return (
+    <div className={cn('flex', mine ? 'justify-end' : 'justify-start')}>
+      <div
+        className={cn(
+          'max-w-[78%] rounded-md px-3.5 py-2.5',
+          mine ? 'bg-ink text-white' : 'bg-muted-soft text-content',
+        )}
+      >
+        <p className="whitespace-pre-wrap break-words text-sub">{msg.body}</p>
+        <p className={cn('mt-1 text-caption', mine ? 'text-white/55' : 'text-content-faint')}>
+          {mine ? 'إنت' : ''} {relTimeAr(msg.at)}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function ConversationDialog({
+  thread,
+  onClose,
+}: {
+  thread: ChatThread | null;
+  onClose: () => void;
+}) {
+  const toast = useToast();
+  const messages = useLeadMessages(thread?.id ?? null);
+  const send = useSendLeadMessage();
+  const [draft, setDraft] = useState('');
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  // آخر رسالة دايمًا قدام عينك — عند الفتح ومع كل رسالة جديدة
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages.data?.length, thread?.id]);
+
+  useEffect(() => {
+    if (!thread) setDraft('');
+  }, [thread]);
+
+  if (!thread) return null;
+
+  const submit = () => {
+    const body = draft.trim();
+    if (!body || send.isPending) return;
+    send.mutate(
+      { threadId: thread.id, body },
+      {
+        onSuccess: () => setDraft(''),
+        onError: (e) => toast({ tone: 'crit', title: 'الرسالة ماتبعتتش', body: errorMessage(e) }),
+      },
+    );
+  };
+
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={thread.withName}
+      subtitle={`${thread.listing.title} ${thread.listing.year} · ${formatPhone(thread.withPhone)}`}
+      size="md"
+      footer={
+        <form
+          className="flex w-full items-center gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            submit();
+          }}
+        >
+          <input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="اكتب ردك…"
+            aria-label="نص الرد"
+            maxLength={1000}
+            className="h-11 w-full flex-1 rounded-full border border-line bg-surface px-4 text-body text-content outline-none transition-colors placeholder:text-content-faint focus:border-accent"
+          />
+          <Button
+            type="submit"
+            icon={<SendHorizontal />}
+            loading={send.isPending}
+            disabled={!draft.trim()}
+          >
+            ابعت
+          </Button>
+        </form>
+      }
+    >
+      {messages.isLoading ? (
+        <div className="space-y-3">
+          <Skeleton className="h-14 w-3/4" />
+          <Skeleton className="ms-auto h-14 w-2/3" />
+          <Skeleton className="h-14 w-1/2" />
+        </div>
+      ) : messages.isError ? (
+        <p className="py-6 text-center text-sub text-crit">{errorMessage(messages.error)}</p>
+      ) : (
+        <div ref={scrollRef} className="max-h-[46vh] space-y-3 overflow-y-auto pe-1">
+          {(messages.data ?? []).map((msg) => (
+            <Bubble key={msg.id} msg={msg} />
+          ))}
+        </div>
+      )}
+    </Dialog>
   );
 }

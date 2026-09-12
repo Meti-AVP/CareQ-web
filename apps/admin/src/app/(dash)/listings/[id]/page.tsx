@@ -57,6 +57,7 @@ import {
   errorMessage,
   useAudit,
   useListing,
+  useRevealPhone,
   useSetListingFlags,
   useSetListingStatus,
   type AuditEntry,
@@ -101,24 +102,6 @@ const ACTION_LABELS: Record<string, string> = {
   'listing.flags_changed': 'تغيير شارات الثقة',
   'listing.status_changed': 'تغيير حالة الإعلان',
 };
-
-/**
- * الصور المحلية في `public/cars`. العقد الحالي بيرجّع صورة واحدة
- * (`imageUrl`) — لما الباك يرجّع مصفوفة صور الإعلان، بدّل المصدر ده بيها
- * والمعرض هيشتغل زي ما هو.
- */
-const PHOTO_POOL = [
-  '/cars/accent.jpg',
-  '/cars/corolla.jpg',
-  '/cars/tucson.jpg',
-  '/cars/sportage.jpg',
-  '/cars/c180.jpg',
-  '/cars/320i.jpg',
-  '/cars/tiggo.jpg',
-  '/cars/mg5.jpg',
-  '/cars/duster.jpg',
-  '/cars/octavia.jpg',
-];
 
 /** أقصى انحراف معروض على مؤشر السعر — بعده المؤشر بيقف في الطرف */
 const DIFF_SCALE = 25;
@@ -184,20 +167,18 @@ export default function ListingDetailPage() {
   const [photoIndex, setPhotoIndex] = useState(0);
   const [pendingFlag, setPendingFlag] = useState<{ key: FlagKey; next: boolean } | null>(null);
   const [pendingStatus, setPendingStatus] = useState<'rejected' | 'removed' | null>(null);
+  /** §10.2: الرقم الكامل بيظهر بس بعد كشف واعٍ متسجّل */
+  const [sellerPhone, setSellerPhone] = useState<string | null>(null);
+  const revealPhone = useRevealPhone();
 
   const l = listing.data;
 
-  /** معرض الصور — أول صورة هي صورة الإعلان الحقيقية */
-  const photos = useMemo(() => {
-    if (!l || !l.imageUrl || l.photosCount === 0) return [];
-    const count = Math.min(Math.max(l.photosCount, 1), 5);
-    const offset = Number(l.id.replace(/\D/g, '')) || 0;
-    const rest = PHOTO_POOL.filter((p) => p !== l.imageUrl);
-    return [
-      l.imageUrl,
-      ...Array.from({ length: count - 1 }, (_, i) => rest[(offset + i) % rest.length]!),
-    ];
-  }, [l]);
+  /**
+   * الصورة الحقيقية الوحيدة في العقد الحالي هي `imageUrl` — مفيش اختراع
+   * لباقي الصور من عندنا. لما endpoint الصور الموقّعة (F-6) يتوصّل
+   * هيرجّع المصفوفة كاملة والمعرض يفضل زي ما هو.
+   */
+  const photos = useMemo(() => (l?.imageUrl && l.photosCount > 0 ? [l.imageUrl] : []), [l]);
 
   const diffPct = l && l.marketAvg ? ((l.price - l.marketAvg) / l.marketAvg) * 100 : null;
   const auditRows = audit.data?.items ?? [];
@@ -324,26 +305,11 @@ export default function ListingDetailPage() {
                   alt={`${l.title} ${l.year}`}
                   className="aspect-[16/9] w-full rounded-md object-cover"
                 />
-                {photos.length > 1 ? (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {photos.map((p, i) => (
-                      <button
-                        key={`${p}-${i}`}
-                        type="button"
-                        onClick={() => setPhotoIndex(i)}
-                        aria-label={`صورة ${i + 1}`}
-                        aria-pressed={i === photoIndex}
-                        className={
-                          i === photoIndex
-                            ? 'overflow-hidden rounded-xs ring-2 ring-accent'
-                            : 'overflow-hidden rounded-xs opacity-70 transition-opacity hover:opacity-100'
-                        }
-                      >
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={p} alt="" className="h-14 w-20 object-cover" />
-                      </button>
-                    ))}
-                  </div>
+                {l.photosCount > 1 ? (
+                  <p className="mt-2 text-caption text-content-faint">
+                    معروضة صورة الغلاف بس — باقي الـ{withThousands(l.photosCount - 1)} صور بتيجي من
+                    endpoint الصور الموقّعة (F-6) لما الباك يتوصّل.
+                  </p>
                 ) : null}
               </>
             ) : (
@@ -650,12 +616,34 @@ export default function ListingDetailPage() {
             </div>
 
             <div className="mt-4 rounded-md bg-surface-alt px-3.5 py-3">
-              <p className="tnum flex items-center gap-2 text-body font-bold text-content">
-                <Phone className="h-4 w-4 text-content-sub" />
-                {maskPhone(l.seller.phone)}
-              </p>
+              <div className="flex items-center justify-between gap-3">
+                <p className="tnum flex items-center gap-2 text-body font-bold text-content">
+                  <Phone className="h-4 w-4 text-content-sub" />
+                  {sellerPhone ?? maskPhone(l.seller.phone)}
+                </p>
+                {!sellerPhone ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    loading={revealPhone.isPending}
+                    onClick={() =>
+                      revealPhone.mutate(
+                        { userId: l.seller.id },
+                        {
+                          onSuccess: (p) => setSellerPhone(p),
+                          onError: (err) => toast({ title: errorMessage(err), tone: 'crit' }),
+                        },
+                      )
+                    }
+                  >
+                    اكشف الرقم
+                  </Button>
+                ) : null}
+              </div>
               <p className="mt-1 text-caption text-content-sub">
-                الرقم مخفي جزئيًا افتراضيًا. كشفه أكشن واعٍ وبيتسجّل في سجل التدقيق (§10.2).
+                {sellerPhone
+                  ? 'الكشف اتسجّل باسمك في سجل التدقيق (user.phone_revealed).'
+                  : 'الرقم مخفي جزئيًا افتراضيًا. كشفه أكشن واعٍ وبيتسجّل في سجل التدقيق (§10.2).'}
               </p>
             </div>
 

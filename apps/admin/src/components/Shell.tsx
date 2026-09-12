@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Activity,
   Banknote,
@@ -16,7 +16,7 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import { cn, StrokeMotif, ThemeToggle, Monogram, palette } from '@carq/ui';
+import { cn, StrokeMotif, Monogram, palette } from '@carq/ui';
 import { usePendingCount, useHealth } from '@carq/api-client';
 
 /**
@@ -77,6 +77,16 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const { data: pending } = usePendingCount();
   const { data: health } = useHealth();
 
+  // الدرج المفتوح على الموبايل بيقفل سكرول الصفحة اللي وراه
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
+
   const isActive = (href: string) =>
     href === '/' ? pathname === '/' : pathname === href || pathname.startsWith(`${href}/`);
 
@@ -90,9 +100,14 @@ export function Shell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen">
       {/* ───────── الشريط الجانبي ───────── */}
+      {/*
+        الدرج على ناحية البداية (يمين في RTL) — نفس مكانه المثبّت على الديسكتوب.
+        وهو مقفول بينزاح لبره يمين (translate-x-full بيتحرك يمين فعليًا)،
+        فمابيبقاش واقف في نص الشاشة زي ما كان بيحصل مع end-0.
+      */}
       <aside
         className={cn(
-          'fixed inset-y-0 end-0 z-40 flex w-[248px] flex-col overflow-hidden bg-ink transition-transform lg:sticky lg:top-0 lg:h-screen lg:translate-x-0',
+          'fixed inset-y-0 start-0 z-40 flex w-[248px] flex-col overflow-hidden bg-ink transition-transform lg:sticky lg:top-0 lg:h-screen lg:translate-x-0',
           open ? 'translate-x-0' : 'translate-x-full lg:translate-x-0',
         )}
       >
@@ -169,7 +184,6 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <p className="truncate text-sub font-bold text-white">مصطفى</p>
             <p className="text-caption text-white/45">مالك CarQ</p>
           </div>
-          <ThemeToggle />
         </div>
       </aside>
 

@@ -9,7 +9,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { AlertTriangle, CheckCircle2, Info, Moon, Sun, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Info, X } from 'lucide-react';
 import { cn } from '../lib/cn';
 import { formatCountdown } from '../lib/format';
 import { secondsUntil } from '../lib/date';
@@ -217,40 +217,4 @@ export function useToast() {
   const ctx = useContext(ToastCtx);
   if (!ctx) throw new Error('useToast لازم يكون جوه ToastProvider');
   return ctx.toast;
-}
-
-/* ═══════════════════════ الوضع الغامق ═══════════════════════ */
-
-/** الوضع الغامق متظبط بالإيد من نفس السلالم — مش قلب تلقائي (§7) */
-export function ThemeToggle({ className }: { className?: string }) {
-  const [dark, setDark] = useState(false);
-
-  useEffect(() => {
-    const saved = window.localStorage.getItem('carq-theme');
-    const isDark = saved === 'dark';
-    setDark(isDark);
-    document.documentElement.dataset.theme = isDark ? 'dark' : 'light';
-  }, []);
-
-  const toggle = () => {
-    const next = !dark;
-    setDark(next);
-    document.documentElement.dataset.theme = next ? 'dark' : 'light';
-    window.localStorage.setItem('carq-theme', next ? 'dark' : 'light');
-  };
-
-  return (
-    <button
-      type="button"
-      onClick={toggle}
-      aria-label={dark ? 'الوضع الفاتح' : 'الوضع الغامق'}
-      title={dark ? 'الوضع الفاتح' : 'الوضع الغامق'}
-      className={cn(
-        'inline-flex h-10 w-10 items-center justify-center rounded-full text-white/70 transition-colors hover:bg-white/10 hover:text-white',
-        className,
-      )}
-    >
-      {dark ? <Sun className="h-[18px] w-[18px]" /> : <Moon className="h-[18px] w-[18px]" />}
-    </button>
-  );
 }

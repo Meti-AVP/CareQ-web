@@ -1,8 +1,10 @@
 'use client';
 
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ArrowUpDown, ChevronLeft, ChevronRight, Download, Search } from 'lucide-react';
 import { cn } from '../lib/cn';
+import { buildCsv, downloadCsv } from '../lib/csv';
+import { withThousands } from '../lib/format';
 import { Button } from './Button';
 import { EmptyState, ErrorState, TableSkeleton } from './Primitives';
 
@@ -11,7 +13,8 @@ import { EmptyState, ErrorState, TableSkeleton } from './Primitives';
  *
  * بيفرض متطلبات §11 مرة واحدة:
  *  · الحالات الأربعة: تحميل · نجاح · فاضي · خطأ
- *  · pagination حقيقي (cursor) — مش تحميل ٢٠٠ صف وتقطيعهم محليًا
+ *  · pagination دايمًا: cursor من السيرفر لو الصفحة مرّرته،
+ *    وإلا تقسيم محلي تلقائي — **مفيش جدول من غير صفحات**
  *  · تصدير CSV
  *
  * مكتوب بدون TanStack Table عن قصد: احتياجنا فرز/فلترة بسيطة،
@@ -25,8 +28,8 @@ export interface Column<T> {
   width?: number;
   align?: 'start' | 'center' | 'end';
   sortable?: boolean;
-  /** القيمة الخام — للفرز والتصدير */
-  value?: (row: T) => string | number;
+  /** القيمة الخام — للفرز والتصدير. `null` = «مفيش قيمة» وبييجي آخر الترتيب دايمًا (P-4) */
+  value?: (row: T) => string | number | null;
   render?: (row: T) => ReactNode;
   /** يتخفي في الشاشات الضيقة */
   hideBelow?: 'md' | 'lg' | 'xl';
@@ -54,6 +57,8 @@ export interface DataTableProps<T> {
   onPrev?: () => void;
   canPrev?: boolean;
   pageInfo?: string;
+  /** حجم صفحة التقسيم المحلي — بيشتغل تلقائي لو مفيش cursor من السيرفر */
+  pageSize?: number;
   toolbar?: ReactNode;
   className?: string;
 }
@@ -81,13 +86,16 @@ export function DataTable<T>({
   onPrev,
   canPrev,
   pageInfo,
+  pageSize = 25,
   toolbar,
   className,
 }: DataTableProps<T>) {
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<{ key: string; dir: 'asc' | 'desc' } | null>(null);
+  /** صفحة التقسيم المحلي — بيشتغل بس لما مفيش cursor من السيرفر */
+  const [localPage, setLocalPage] = useState(0);
 
-  const rawValue = (row: T, col: Column<T>): string | number => {
+  const rawValue = (row: T, col: Column<T>): string | number | null => {
     if (col.value) return col.value(row);
     const v = (row as Record<string, unknown>)[col.key];
     return typeof v === 'number' ? v : String(v ?? '');
@@ -98,7 +106,7 @@ export function DataTable<T>({
     if (query.trim()) {
       const q = query.trim().toLowerCase();
       out = out.filter((r) =>
-        columns.some((c) => String(rawValue(r, c)).toLowerCase().includes(q)),
+        columns.some((c) => String(rawValue(r, c) ?? '').toLowerCase().includes(q)),
       );
     }
     if (sort) {
@@ -107,6 +115,11 @@ export function DataTable<T>({
         out = [...out].sort((a, b) => {
           const av = rawValue(a, col);
           const bv = rawValue(b, col);
+          // «مفيش قيمة» آخر الترتيب في الاتجاهين — مش بتتنكر كصفر (P-4)
+          if (av === null || bv === null) {
+            if (av === null && bv === null) return 0;
+            return av === null ? 1 : -1;
+          }
           const cmp =
             typeof av === 'number' && typeof bv === 'number'
               ? av - bv
@@ -119,18 +132,44 @@ export function DataTable<T>({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, columns, query, sort]);
 
+  /**
+   * وضعان للتقسيم:
+   *  · سيرفر: الصفحة مرّرت onNext/onPrev — الجدول بيعرض اللي جاله زي ما هو.
+   *  · محلي: مفيش cursor — الجدول بيقسّم بنفسه على pageSize،
+   *    عشان قاعدة «كل جدول ليه pagination» تتحقق في كل مكان.
+   */
+  const serverPaged = Boolean(onNext || onPrev);
+  const pageCount = serverPaged ? 1 : Math.max(1, Math.ceil(visible.length / pageSize));
+  const safePage = Math.min(localPage, pageCount - 1);
+  const paged = serverPaged
+    ? visible
+    : visible.slice(safePage * pageSize, (safePage + 1) * pageSize);
+
+  // أي تغيير في البيانات أو البحث أو الفرز بيرجّع لأول صفحة
+  useEffect(() => {
+    setLocalPage(0);
+  }, [rows.length, query, sort]);
+
+  const localInfo =
+    visible.length > 0
+      ? `${withThousands(safePage * pageSize + 1)} – ${withThousands(safePage * pageSize + paged.length)} من ${withThousands(visible.length)}`
+      : undefined;
+
+  const showFooter =
+    !loading &&
+    !error &&
+    visible.length > 0 &&
+    (serverPaged ? Boolean(onNext || onPrev) : pageCount > 1);
+
+  /** التصدير بيلم كل الصفوف المفلترة مش الصفحة بس — والخلايا معقّمة ضد حقن المعادلات */
   const exportCsv = () => {
-    const head = columns.map((c) => c.header).join(',');
-    const body = visible
-      .map((r) => columns.map((c) => `"${String(rawValue(r, c)).replace(/"/g, '""')}"`).join(','))
-      .join('\n');
-    const blob = new Blob([`﻿${head}\n${body}`], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${exportName ?? 'carq'}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadCsv(
+      exportName ?? 'carq',
+      buildCsv(
+        columns.map((c) => c.header),
+        visible.map((r) => columns.map((c) => rawValue(r, c) ?? '')),
+      ),
+    );
   };
 
   return (
@@ -205,7 +244,7 @@ export function DataTable<T>({
               </tr>
             </thead>
             <tbody>
-              {visible.map((row) => {
+              {paged.map((row) => {
                 const tone = rowTone?.(row);
                 return (
                   <tr
@@ -227,7 +266,7 @@ export function DataTable<T>({
                           c.hideBelow && hideClass[c.hideBelow],
                         )}
                       >
-                        {c.render ? c.render(row) : String(rawValue(row, c))}
+                        {c.render ? c.render(row) : String(rawValue(row, c) ?? '—')}
                       </td>
                     ))}
                   </tr>
@@ -238,14 +277,33 @@ export function DataTable<T>({
         </div>
       )}
 
-      {(onNext || onPrev) && !loading && visible.length > 0 ? (
+      {showFooter ? (
         <div className="flex items-center justify-between gap-3 border-t border-line px-4 py-3">
-          <span className="text-caption text-content-sub">{pageInfo}</span>
+          <span className="tnum text-caption text-content-sub">
+            {serverPaged ? pageInfo : localInfo}
+          </span>
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={onPrev} disabled={!canPrev} icon={<ChevronRight />}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={serverPaged ? onPrev : () => setLocalPage((p) => Math.max(0, p - 1))}
+              disabled={serverPaged ? !canPrev : safePage === 0}
+              icon={<ChevronRight />}
+            >
               السابق
             </Button>
-            <Button variant="outline" size="sm" onClick={onNext} disabled={!hasMore} iconEnd={<ChevronLeft />}>
+            {!serverPaged ? (
+              <span className="tnum px-1 text-caption font-bold text-content-sub">
+                {withThousands(safePage + 1)} / {withThousands(pageCount)}
+              </span>
+            ) : null}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={serverPaged ? onNext : () => setLocalPage((p) => Math.min(pageCount - 1, p + 1))}
+              disabled={serverPaged ? !hasMore : safePage >= pageCount - 1}
+              iconEnd={<ChevronLeft />}
+            >
               التالي
             </Button>
           </div>

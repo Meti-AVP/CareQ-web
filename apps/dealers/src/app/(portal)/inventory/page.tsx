@@ -11,6 +11,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  RotateCcw,
   Trash2,
   Upload,
 } from 'lucide-react';
@@ -42,6 +43,7 @@ import {
   useMarkListingSold,
   useMyLeads,
   useMyListings,
+  useReactivateListing,
   useRenewListing,
   useUploadListingPhoto,
   type Listing,
@@ -105,6 +107,7 @@ export default function InventoryPage() {
   const auctions = useDealerAuctions('all');
 
   const markSold = useMarkListingSold();
+  const reactivate = useReactivateListing();
   const renew = useRenewListing();
   const remove = useDeleteListing();
   const uploadPhoto = useUploadListingPhoto();
@@ -129,9 +132,12 @@ export default function InventoryPage() {
     return map;
   }, [leads.data]);
 
-  /** العربيات اللي عليها مزاد — التعديل عليها مقيّد (L-7) */
+  /** العربيات اللي عليها مزاد **شغال** — دي بس اللي التعديل عليها مقيّد (L-7) */
   const inAuction = useMemo(
-    () => new Set((auctions.data ?? []).map((a) => a.listing.id)),
+    () =>
+      new Set(
+        (auctions.data ?? []).filter((a) => a.status === 'live').map((a) => a.listing.id),
+      ),
     [auctions.data],
   );
 
@@ -176,6 +182,23 @@ export default function InventoryPage() {
             body: `${l.title} ${l.year} هيفضل معروض ٣٠ يوم كمان من النهاردة.`,
           }),
         onError: (e) => toast({ tone: 'crit', title: 'التجديد مانفعش', body: errorMessage(e) }),
+      },
+    );
+  };
+
+  /** L-13: البيعة اتفكّت — الإعلان بيرجع نشط بنفس بياناته */
+  const onReactivate = (l: Listing) => {
+    reactivate.mutate(
+      { id: l.id },
+      {
+        onSuccess: () =>
+          toast({
+            tone: 'ok',
+            title: 'رجعت للبيع',
+            body: `${l.title} ${l.year} بقت نشطة تاني وظاهرة في السوق.`,
+          }),
+        onError: (e) =>
+          toast({ tone: 'crit', title: 'مقدرناش نرجّعها', body: errorMessage(e) }),
       },
     );
   };
@@ -345,15 +368,28 @@ export default function InventoryPage() {
           >
             <Pencil className="h-[18px] w-[18px]" />
           </IconButton>
-          <IconButton
-            label="تعليم متباع"
-            onClick={(e) => {
-              e.stopPropagation();
-              setSoldTarget(l);
-            }}
-          >
-            <CheckCircle2 className="h-[18px] w-[18px]" />
-          </IconButton>
+          {l.status === 'sold' ? (
+            /* L-13: «اتباعت» مش نهائية — بترجع نشطة بنفس بياناتها */
+            <IconButton
+              label="رجّعها للبيع"
+              onClick={(e) => {
+                e.stopPropagation();
+                onReactivate(l);
+              }}
+            >
+              <RotateCcw className="h-[18px] w-[18px]" />
+            </IconButton>
+          ) : (
+            <IconButton
+              label="تعليم متباع"
+              onClick={(e) => {
+                e.stopPropagation();
+                setSoldTarget(l);
+              }}
+            >
+              <CheckCircle2 className="h-[18px] w-[18px]" />
+            </IconButton>
+          )}
           <IconButton
             label="تجديد ٣٠ يوم"
             onClick={(e) => {
@@ -447,7 +483,6 @@ export default function InventoryPage() {
               ضيف عربية
             </Button>
           }
-          pageInfo={`${withThousands(rows.length)} من ${withThousands(all.length)} عربية`}
           toolbar={
             <div className="flex flex-wrap items-center gap-2">
               <Select

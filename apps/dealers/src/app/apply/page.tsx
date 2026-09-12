@@ -37,7 +37,8 @@ import {
   useToast,
   withThousands,
 } from '@carq/ui';
-import { AREAS_BY_GOV, GOVERNORATES, isEgyptianPhone } from '@/lib/catalog';
+import { useCatalog } from '@carq/api-client';
+import { isEgyptianPhone } from '@/lib/catalog';
 
 /**
  * ════════════════════════════════════════════════════════════════
@@ -91,7 +92,13 @@ export default function ApplyPage() {
   const [docErrors, setDocErrors] = useState<Partial<Record<string, string>>>({});
   const [venue, setVenue] = useState<Array<string | null>>(Array(VENUE_SLOTS).fill(null));
 
-  const areas = useMemo(() => AREAS_BY_GOV[governorate] ?? [], [governorate]);
+  /** المحافظات والمناطق من الكتالوج — القايمة فاضية لثانية لحد ما يوصل */
+  const catalog = useCatalog();
+  const governorates = catalog.data?.governorates ?? [];
+  const areas = useMemo(
+    () => catalog.data?.areasByGov[governorate] ?? [],
+    [catalog.data, governorate],
+  );
   const venueCount = venue.filter(Boolean).length;
 
   const errors = {
@@ -336,7 +343,7 @@ export default function ApplyPage() {
                           invalid={touched && Boolean(errors.governorate)}
                         >
                           <option value="">اختار</option>
-                          {GOVERNORATES.map((g) => (
+                          {governorates.map((g) => (
                             <option key={g} value={g}>
                               {g}
                             </option>

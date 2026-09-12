@@ -11,12 +11,16 @@ import {
   ChartFrame,
   DataTable,
   Funnel,
+  Histogram,
   PageHeader,
   SectionHeader,
   Sheet,
   Tabs,
+  TimeSeriesLine,
   VerticalBars,
+  axisDayLabel,
   cn,
+  compactEGP,
   formatDateAr,
   formatEGP,
   formatPctPlain,
@@ -34,6 +38,7 @@ import {
   useBreakdown,
   useFinancingApps,
   useFunnel,
+  useTimeseries,
   type FinancingApplication,
   type FinancingStatus,
 } from '@carq/api-client';
@@ -92,6 +97,10 @@ export default function FinancingPage() {
   const funnel = useFunnel('financing');
   const terms = useBreakdown('term_months');
   const tiers = useBreakdown('down_tier');
+  /** C-33: مرابحة مقابل عادي على الوقت */
+  const byType = useTimeseries('financing_by_type', 90);
+  /** C-34: القسط الشهري من الـsnapshot — شرايح ٢٬٠٠٠ ج.م */
+  const monthly = useBreakdown('financing_monthly');
 
   const rows = apps.data?.items ?? [];
 
@@ -275,6 +284,30 @@ export default function FinancingPage() {
     [tiers.data],
   );
 
+  /** C-33: صفوف اليوم × نوع التمويل */
+  const typeRows = useMemo(
+    () =>
+      (byType.data ?? []).map((p) => ({
+        label: axisDayLabel(p.t),
+        islamic: p.series.islamic ?? 0,
+        normal: p.series.normal ?? 0,
+      })),
+    [byType.data],
+  );
+  const TYPE_SERIES = [
+    { key: 'islamic', label: 'مرابحة', color: seriesColor(0) },
+    { key: 'normal', label: 'عادي', color: seriesColor(1) },
+  ];
+
+  /** C-34: شرايح القسط مترتّبة تصاعدي */
+  const monthlyRows = useMemo(
+    () =>
+      [...(monthly.data ?? [])]
+        .sort((a, b) => Number(a.key) - Number(b.key))
+        .map((b) => ({ label: compactEGP(Number(b.key)), value: b.count })),
+    [monthly.data],
+  );
+
   return (
     <>
       <PageHeader
@@ -285,6 +318,7 @@ export default function FinancingPage() {
           lateCount > 0 ? (
             <span className="tnum rounded-full bg-crit px-3.5 py-1.5 text-sub font-bold text-white">
               {withThousands(lateCount)} عدّى الـ٢٤ ساعة
+              {apps.data?.nextCursor ? ' في الصفحة دي' : ''}
             </span>
           ) : null
         }
@@ -343,7 +377,7 @@ export default function FinancingPage() {
           }
         />
 
-        {/* ───── التشارتس C-30 · C-31 · C-32 ───── */}
+        {/* ───── التشارتس C-30 … C-34 ───── */}
         <SectionHeader
           title="شكل الطلبات"
           hint="الأرقام دي من لقطات العروض المسجّلة — مش من نسب جميل الحالية"
@@ -358,6 +392,7 @@ export default function FinancingPage() {
             height={280}
             loading={funnel.isLoading}
             error={funnel.error ? errorMessage(funnel.error) : undefined}
+            onRetry={() => funnel.refetch()}
             isEmpty={!funnel.isLoading && funnelSteps.length === 0}
             tableColumns={[
               { key: 'label', label: 'الخطوة' },
@@ -382,6 +417,7 @@ export default function FinancingPage() {
             height={280}
             loading={terms.isLoading}
             error={terms.error ? errorMessage(terms.error) : undefined}
+            onRetry={() => terms.refetch()}
             isEmpty={!terms.isLoading && termRows.length === 0}
             tableColumns={[
               { key: 'label', label: 'المدة' },
@@ -404,6 +440,7 @@ export default function FinancingPage() {
             height={280}
             loading={tiers.isLoading}
             error={tiers.error ? errorMessage(tiers.error) : undefined}
+            onRetry={() => tiers.refetch()}
             isEmpty={!tiers.isLoading && tierRows.length === 0}
             tableColumns={[
               { key: 'label', label: 'المقدم' },
@@ -417,6 +454,54 @@ export default function FinancingPage() {
               unit="طلب"
               series={[{ key: 'count', label: 'طلبات', color: seriesColor(2) }]}
             />
+          </ChartFrame>
+        </div>
+
+        <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
+          <ChartFrame
+            code="C-33"
+            title="مرابحة مقابل عادي — على الوقت"
+            hint="مساحة مكدّسة: حجم الطلبات ونوعها في رسم واحد"
+            height={280}
+            loading={byType.isLoading}
+            error={byType.isError ? errorMessage(byType.error) : undefined}
+            onRetry={() => byType.refetch()}
+            isEmpty={!byType.isLoading && typeRows.every((r) => !r.islamic && !r.normal)}
+            series={TYPE_SERIES}
+            tableColumns={[
+              { key: 'label', label: 'اليوم' },
+              { key: 'islamic', label: 'مرابحة' },
+              { key: 'normal', label: 'عادي' },
+            ]}
+            tableRows={typeRows}
+          >
+            <TimeSeriesLine
+              data={typeRows}
+              series={TYPE_SERIES}
+              area
+              stacked
+              height={280}
+              unit="طلب"
+            />
+          </ChartFrame>
+
+          <ChartFrame
+            code="C-34"
+            title="توزيع القسط الشهري"
+            hint="شرايح ٢٬٠٠٠ ج.م — شكل الالتزام اللي العملاء بيدخلوا فيه"
+            height={280}
+            loading={monthly.isLoading}
+            error={monthly.isError ? errorMessage(monthly.error) : undefined}
+            onRetry={() => monthly.refetch()}
+            isEmpty={!monthly.isLoading && monthlyRows.length === 0}
+            footnote="القسط من اللقطة المسجّلة وقت التقديم — مش محسوب من جديد (F-4)"
+            tableColumns={[
+              { key: 'label', label: 'الشريحة' },
+              { key: 'value', label: 'طلبات' },
+            ]}
+            tableRows={monthlyRows}
+          >
+            <Histogram data={monthlyRows} height={280} unit="طلب" />
           </ChartFrame>
         </div>
       </Sheet>

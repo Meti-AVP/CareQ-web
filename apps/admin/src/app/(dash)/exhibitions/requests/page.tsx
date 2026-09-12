@@ -132,13 +132,23 @@ export default function ExhibitionRequestsPage() {
   const [fields, setFields] = useState<string[]>([]);
   const [ownerPhone, setOwnerPhone] = useState<string | null>(null);
 
+  /** الصفحات بالـcursor — مكدّس عشان «السابق» يشتغل، وبيتصفّر مع تغيير التبويب */
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [trail, setTrail] = useState<Array<string | null>>([]);
+  const resetPage = () => {
+    setCursor(null);
+    setTrail([]);
+  };
+
+  /** الأربع استعلامات دايمًا شغالة — عدادات التبويبات من `total` بتاعها */
   const submitted = useApplications('submitted');
   const needsInfo = useApplications('needs_info');
   const approved = useApplications('approved');
   const rejected = useApplications('rejected');
 
   const byTab = { submitted, needs_info: needsInfo, approved, rejected } as const;
-  const current = byTab[tab];
+  /** جدول التبويب الحالي بيتبع الـcursor — والعدادات فوق مش بتتأثر بيه */
+  const current = useApplications(tab, cursor);
 
   const detail = useApplication(selectedId);
   const review = useReviewApplication();
@@ -311,7 +321,15 @@ export default function ExhibitionRequestsPage() {
           </Link>
         }
       >
-        <Tabs tabs={tabs} value={tab} onChange={(k) => setTab(k as ReviewTab)} onDark />
+        <Tabs
+          tabs={tabs}
+          value={tab}
+          onChange={(k) => {
+            setTab(k as ReviewTab);
+            resetPage();
+          }}
+          onDark
+        />
       </PageHeader>
 
       <Sheet>
@@ -353,6 +371,22 @@ export default function ExhibitionRequestsPage() {
           searchable
           searchPlaceholder="دوّر باسم المعرض أو المالك…"
           exportName={`exhibition-applications-${tab}`}
+          hasMore={Boolean(current.data?.nextCursor)}
+          canPrev={trail.length > 0}
+          onNext={() => {
+            setTrail((t) => [...t, cursor]);
+            setCursor(current.data?.nextCursor ?? null);
+          }}
+          onPrev={() => {
+            const prev = trail.length ? (trail[trail.length - 1] ?? null) : null;
+            setTrail((t) => t.slice(0, -1));
+            setCursor(prev);
+          }}
+          pageInfo={
+            current.data?.total
+              ? `${withThousands(trail.length * 25 + 1)} – ${withThousands(trail.length * 25 + (current.data?.items.length ?? 0))} من ${withThousands(current.data.total)} طلب`
+              : undefined
+          }
         />
       </Sheet>
 

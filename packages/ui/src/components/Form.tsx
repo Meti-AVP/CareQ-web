@@ -1,13 +1,25 @@
 'use client';
 
-import { forwardRef, useId, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react';
+import { createContext, forwardRef, useContext, useId, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react';
 import { AlertCircle, Check, ChevronDown } from 'lucide-react';
 import { cn } from '../lib/cn';
 
 const fieldBase =
   'w-full rounded-sm border border-line bg-surface-alt px-3.5 text-body text-content outline-none transition-colors placeholder:text-content-faint focus:border-accent focus:bg-surface disabled:opacity-50';
 
-/** غلاف الحقل: label + تلميح + رسالة خطأ */
+/**
+ * ربط الليبل بالخانة بيتم بالسياق مش بـhtmlFor:
+ * الخانة جوه Field ممكن تكون متلفوفة في div (أيقونة جوه الخانة مثلًا)
+ * أو يكون فيه أكتر من خانة تحت نفس الليبل — `aria-labelledby` بيشتغل
+ * صح في الحالتين، وقارئ الشاشة بيقرا الليبل والخطأ مع بعض.
+ */
+const FieldCtx = createContext<{
+  labelledBy?: string;
+  describedBy?: string;
+  invalid?: boolean;
+}>({});
+
+/** غلاف الحقل: label + تلميح + رسالة خطأ — وكله متوصّل ببعضه للـa11y */
 export function Field({
   label,
   hint,
@@ -23,34 +35,65 @@ export function Field({
   children: ReactNode;
   className?: string;
 }) {
+  const id = useId();
+  const labelId = `${id}-label`;
+  const msgId = `${id}-msg`;
+  const hasMsg = Boolean(error || hint);
+
   return (
     <div className={cn('space-y-1.5', className)}>
       {label ? (
-        <label className="block text-sub font-bold text-content">
+        <label id={labelId} className="block text-sub font-bold text-content">
           {label}
           {required ? <span className="ms-1 text-accent">*</span> : null}
         </label>
       ) : null}
-      {children}
+      <FieldCtx.Provider
+        value={{
+          labelledBy: label ? labelId : undefined,
+          describedBy: hasMsg ? msgId : undefined,
+          invalid: Boolean(error),
+        }}
+      >
+        {children}
+      </FieldCtx.Provider>
       {error ? (
-        <p className="flex items-center gap-1.5 text-caption font-bold text-crit">
+        <p id={msgId} className="flex items-center gap-1.5 text-caption font-bold text-crit">
           <AlertCircle className="h-3.5 w-3.5 shrink-0" />
           {error}
         </p>
       ) : hint ? (
-        <p className="text-caption text-content-faint">{hint}</p>
+        <p id={msgId} className="text-caption text-content-faint">{hint}</p>
       ) : null}
     </div>
   );
 }
 
+/** بيوصّل خصائص الـa11y من Field لأقرب خانة — من غير ما يدوس على اللي جاي من بره */
+function useFieldA11y(rest: {
+  'aria-labelledby'?: string;
+  'aria-label'?: string;
+  'aria-describedby'?: string;
+  'aria-invalid'?: InputHTMLAttributes<HTMLInputElement>['aria-invalid'];
+}) {
+  const ctx = useContext(FieldCtx);
+  return {
+    'aria-labelledby':
+      rest['aria-labelledby'] ?? (rest['aria-label'] ? undefined : ctx.labelledBy),
+    'aria-describedby': rest['aria-describedby'] ?? ctx.describedBy,
+    'aria-invalid': rest['aria-invalid'] ?? (ctx.invalid ? true : undefined),
+  } as const;
+}
+
 export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement> & { invalid?: boolean }>(
   function Input({ className, invalid, ...rest }, ref) {
+    const a11y = useFieldA11y(rest);
     return (
       <input
         ref={ref}
         className={cn(fieldBase, 'h-11', invalid && 'border-crit focus:border-crit', className)}
         {...rest}
+        {...a11y}
       />
     );
   },
@@ -60,11 +103,13 @@ export const Textarea = forwardRef<
   HTMLTextAreaElement,
   TextareaHTMLAttributes<HTMLTextAreaElement> & { invalid?: boolean }
 >(function Textarea({ className, invalid, ...rest }, ref) {
+  const a11y = useFieldA11y(rest);
   return (
     <textarea
       ref={ref}
       className={cn(fieldBase, 'resize-none py-2.5', invalid && 'border-crit focus:border-crit', className)}
       {...rest}
+      {...a11y}
     />
   );
 });
@@ -73,6 +118,7 @@ export const Select = forwardRef<
   HTMLSelectElement,
   SelectHTMLAttributes<HTMLSelectElement> & { invalid?: boolean }
 >(function Select({ className, invalid, children, ...rest }, ref) {
+  const a11y = useFieldA11y(rest);
   return (
     <div className="relative">
       <select
@@ -84,6 +130,7 @@ export const Select = forwardRef<
           className,
         )}
         {...rest}
+        {...a11y}
       >
         {children}
       </select>

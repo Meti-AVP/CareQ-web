@@ -3,6 +3,7 @@
 export * from './types';
 export { ApiError, errorMessage, errorCode } from './errors';
 export { http, API_URL, USE_MOCK, tokenStore, idempotencyKey } from './client';
+export { nowMs } from './time';
 
 export * from './admin/hooks';
 export * from './dealers/hooks';

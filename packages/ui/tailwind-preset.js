@@ -12,7 +12,6 @@ const c = (name) => `rgb(var(--c-${name}) / <alpha-value>)`;
 
 /** @type {import('tailwindcss').Config} */
 module.exports = {
-  darkMode: ['class', '[data-theme="dark"]'],
   theme: {
     extend: {
       /*
@@ -63,12 +62,12 @@ module.exports = {
       },
       fontSize: {
         display: ['34px', { lineHeight: '46px', fontWeight: '800' }],
-        h1: ['26px', { lineHeight: '38px', fontWeight: '800' }],
-        h2: ['21px', { lineHeight: '32px', fontWeight: '700' }],
-        title: ['17px', { lineHeight: '26px', fontWeight: '700' }],
-        body: ['15px', { lineHeight: '24px', fontWeight: '500' }],
-        sub: ['13.5px', { lineHeight: '21px', fontWeight: '500' }],
-        caption: ['12px', { lineHeight: '18px', fontWeight: '500' }],
+        h1: ['27px', { lineHeight: '39px', fontWeight: '800' }],
+        h2: ['22px', { lineHeight: '33px', fontWeight: '700' }],
+        title: ['18px', { lineHeight: '27px', fontWeight: '700' }],
+        body: ['16px', { lineHeight: '25px', fontWeight: '500' }],
+        sub: ['14.5px', { lineHeight: '22px', fontWeight: '500' }],
+        caption: ['13px', { lineHeight: '19px', fontWeight: '500' }],
       },
       boxShadow: {
         card: '0 8px 16px rgba(19,26,46,0.06)',

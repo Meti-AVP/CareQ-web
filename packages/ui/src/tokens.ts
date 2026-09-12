@@ -91,15 +91,19 @@ export const radius = {
   pill: 999,
 } as const;
 
-/** سلم الخط — نفس مقاييس الموبايل (Tajawal) */
+/**
+ * سلم الخط — مقاييس الموبايل مكبّرة درجة للويب:
+ * مسافة القراءة على المكتب أبعد من الموبايل، والمقاسات الأصلية طلعت
+ * صغيرة على الشاشات الكبيرة (ملاحظة مالك المنتج).
+ */
 export const typeScale = {
   display: { size: 34, line: 46, weight: 800 },
-  h1: { size: 26, line: 38, weight: 800 },
-  h2: { size: 21, line: 32, weight: 700 },
-  title: { size: 17, line: 26, weight: 700 },
-  body: { size: 15, line: 24, weight: 500 },
-  sub: { size: 13.5, line: 21, weight: 500 },
-  caption: { size: 12, line: 18, weight: 500 },
+  h1: { size: 27, line: 39, weight: 800 },
+  h2: { size: 22, line: 33, weight: 700 },
+  title: { size: 18, line: 27, weight: 700 },
+  body: { size: 16, line: 25, weight: 500 },
+  sub: { size: 14.5, line: 22, weight: 500 },
+  caption: { size: 13, line: 19, weight: 500 },
 } as const;
 
 /**

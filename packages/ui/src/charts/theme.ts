@@ -14,7 +14,7 @@
  */
 import { chartPalette } from '../tokens';
 
-/** ألوان بتتقرا من متغيرات CSS فالوضع الغامق بيشتغل من غير قلب تلقائي */
+/** ألوان بتتقرا من متغيرات CSS — نفس مصدر الحقيقة بتاع باقي الواجهة */
 export const chartVars = {
   grid: 'var(--line)',
   axis: 'var(--text-faint)',

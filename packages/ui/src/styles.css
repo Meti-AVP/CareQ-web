@@ -27,8 +27,8 @@
   --muted: #6f7691;
   /*
    * نفس الألوان كقنوات RGB — كلاسات Tailwind بتقرا منها (tailwind-preset.js)
-   * فالوضع الغامق بيقلب الكروت والنصوص فعلًا، مش خلفية الصفحة بس.
-   * الحبر الكحلي (--c-ink) ثابت في الوضعين: هو الهوية.
+   * عشان معدِّلات الشفافية (bg-crit-soft/40 · border-accent/25) تشتغل صح.
+   * الثيم فاتح بس — نفس هوية التطبيق، مفيش وضع غامق.
    */
   --c-ink: 19 26 46;
   --c-ink-soft: 28 37 64;
@@ -55,46 +55,6 @@
   color-scheme: light;
 }
 
-/**
- * الوضع الغامق متظبط بالإيد من نفس السلالم — مش قلب تلقائي
- * (ADMIN_DASHBOARD_SPEC §7). الأسطح بتغمق، والبرتقالي بيفتح شوية
- * عشان يفضل مقروء على الكحلي.
- */
-[data-theme='dark'] {
-  --bg: #0e1424;
-  --surface: #161d33;
-  --surface-alt: #1b2340;
-  --line: #2a3350;
-  --line-strong: #38446a;
-  --text: #f2f4fa;
-  --text-sub: #9aa3c0;
-  --text-faint: #6d7796;
-  --accent: #ff6a41;
-  --accent-soft: #33180f;
-  --ok: #3fa568;
-  --warn: #d08a2e;
-  --crit: #d9564c;
-  --c-canvas: 14 20 36;
-  --c-surface: 22 29 51;
-  --c-surface-alt: 27 35 64;
-  --c-line: 42 51 80;
-  --c-line-strong: 56 68 106;
-  --c-content: 242 244 250;
-  --c-content-sub: 154 163 192;
-  --c-content-faint: 109 119 150;
-  --c-accent: 255 106 65;
-  --c-accent-soft: 51 24 15;
-  --c-ok: 63 165 104;
-  --c-ok-soft: 23 51 36;
-  --c-warn: 208 138 46;
-  --c-warn-soft: 58 42 18;
-  --c-crit: 217 86 76;
-  --c-crit-soft: 59 27 26;
-  --c-muted: 154 163 192;
-  --c-muted-soft: 34 43 71;
-  color-scheme: dark;
-}
-
 @layer base {
   * {
     border-color: var(--line);
@@ -108,8 +68,8 @@
     background-color: var(--bg);
     color: var(--text);
     font-family: var(--font-tajawal), Tajawal, system-ui, sans-serif;
-    font-size: 15px;
-    line-height: 24px;
+    font-size: 16px;
+    line-height: 25px;
     font-weight: 500;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;

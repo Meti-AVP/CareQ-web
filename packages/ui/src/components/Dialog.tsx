@@ -1,11 +1,18 @@
 'use client';
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, X } from 'lucide-react';
 import { cn } from '../lib/cn';
 import { Button } from './Button';
 
-/** ديالوج أساسي — بيقفل بـEsc وبالضغط بره، وبيقفل سكرول الصفحة */
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/**
+ * ديالوج أساسي — بيقفل بـEsc وبالضغط بره، وبيقفل سكرول الصفحة.
+ * التركيز **محبوس جواه** (Tab بيلف مايخرجش)، ولما يقفل بيرجع
+ * للعنصر اللي فتحه — لوحة المفاتيح وقارئ الشاشة مايتوهوش.
+ */
 export function Dialog({
   open,
   onClose,
@@ -23,17 +30,50 @@ export function Dialog({
   footer?: ReactNode;
   size?: 'sm' | 'md' | 'lg';
 }) {
+  const panelRef = useRef<HTMLDivElement | null>(null);
+
   useEffect(() => {
     if (!open) return;
+
+    // نرجّع التركيز لصاحبه بعد القفل
+    const opener = document.activeElement as HTMLElement | null;
+
+    // أول عنصر قابل للتركيز جوه الديالوج ياخد التركيز
+    const focusFirst = () => {
+      const nodes = panelRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE);
+      (nodes?.[0] ?? panelRef.current)?.focus();
+    };
+    const raf = requestAnimationFrame(focusFirst);
+
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') {
+        onClose();
+        return;
+      }
+      // حبس Tab جوه الديالوج
+      if (e.key === 'Tab' && panelRef.current) {
+        const nodes = Array.from(panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE));
+        if (nodes.length === 0) return;
+        const first = nodes[0]!;
+        const last = nodes[nodes.length - 1]!;
+        const active = document.activeElement;
+        if (e.shiftKey && (active === first || !panelRef.current.contains(active))) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && active === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
     };
     document.addEventListener('keydown', onKey);
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
+      cancelAnimationFrame(raf);
       document.removeEventListener('keydown', onKey);
       document.body.style.overflow = prev;
+      opener?.focus?.();
     };
   }, [open, onClose]);
 
@@ -54,13 +94,19 @@ export function Dialog({
         onClick={onClose}
         className="absolute inset-0 animate-fade bg-ink/45 backdrop-blur-[2px]"
       />
+      {/*
+        flex-col + min-h-0: الجسم هو الوحيد اللي بيسكرول، والرأس والفوتر
+        دايمًا ظاهرين — حتى على شاشة قصيرة الديالوج عمره ما يتقطع.
+      */}
       <div
+        ref={panelRef}
+        tabIndex={-1}
         className={cn(
-          'relative z-10 max-h-[88vh] w-full animate-rise overflow-hidden rounded-lg bg-surface shadow-float',
+          'relative z-10 flex max-h-[calc(100dvh-32px)] w-full animate-rise flex-col overflow-hidden rounded-lg bg-surface shadow-float outline-none',
           widths[size],
         )}
       >
-        <div className="flex items-start justify-between gap-4 border-b border-line px-6 py-5">
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-line px-6 py-5">
           <div className="min-w-0">
             <h2 className="text-h2 text-content">{title}</h2>
             {subtitle ? <p className="mt-1 text-sub text-content-sub">{subtitle}</p> : null}
@@ -74,9 +120,9 @@ export function Dialog({
             <X className="h-5 w-5" />
           </button>
         </div>
-        <div className="max-h-[62vh] overflow-y-auto px-6 py-5">{children}</div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">{children}</div>
         {footer ? (
-          <div className="flex items-center justify-end gap-2 border-t border-line bg-surface-alt px-6 py-4">
+          <div className="flex shrink-0 items-center justify-end gap-2 border-t border-line bg-surface-alt px-6 py-4">
             {footer}
           </div>
         ) : null}
