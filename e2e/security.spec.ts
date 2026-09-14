@@ -2,10 +2,11 @@ import { expect, test } from '@playwright/test';
 import { ADMIN, DEALERS, open, watchConsole } from './helpers';
 
 /**
- * الفحص الأمني — من غير Authentication (بالاتفاق، هيتضاف بعدين)
- *
- * بيتأكد إن كل خطوط الدفاع التانية شغالة فعليًا في المتصفح:
- * ترويسات الأمان، منع XSS، إخفاء التليفونات، نضافة التخزين.
+ * الفحص الأمني — الأوثنتيكيشن بقى مبني من المرحلة ٢ (الجلسة جاهزة من
+ * global-setup.ts زي باقي e2e). ده بيفحص خطوط الدفاع التانية شغالة
+ * فعليًا في المتصفح: ترويسات الأمان، منع XSS، إخفاء التليفونات، نضافة
+ * التخزين — بما فيها التأكد إن كوكي الجلسة httpOnly فعلًا (مش ظاهرة
+ * لـ`document.cookie` خالص، رغم إنها موجودة على مستوى الشبكة).
  */
 
 for (const [base, name] of [
@@ -34,7 +35,7 @@ for (const [base, name] of [
     expect(headers['x-powered-by']).toBeUndefined();
   });
 
-  test(`${name}: مفيش أي تخزين في المتصفح ولا كوكيز (§10)`, async ({ page }) => {
+  test(`${name}: مفيش تخزين متصفح، وكوكي الجلسة مش ظاهرة لجافاسكريبت (§10 · I-4)`, async ({ page }) => {
     await open(page, base + '/');
     // نتمشى في اللوحة شوية عشان أي كود عنده نية يخزّن ياخد فرصته
     await page.waitForTimeout(1500);
@@ -42,11 +43,44 @@ for (const [base, name] of [
     const storage = await page.evaluate(() => ({
       local: window.localStorage.length,
       session: window.sessionStorage.length,
-      cookies: document.cookie,
+      // __next_hmr_refresh_hash__ كوكي داخلية من Next.js نفسه في وضع
+      // `dev` بس (Fast Refresh) — بتتحط تلقائي لما HMR يشتغل، مالهاش
+      // علاقة بالتطبيق، ومش موجودة أصلًا في بناء إنتاجي. بنستبعدها هنا
+      // عشان الفحص يبقى عن كوكيز التطبيق بالظبط، مش تفصيلة تطوير داخلية.
+      cookies: document.cookie
+        .split(';')
+        .map((c) => c.trim())
+        .filter((c) => c && !c.startsWith('__next_hmr_refresh_hash__='))
+        .join('; '),
     }));
     expect(storage.local, 'localStorage المفروض فاضية').toBe(0);
     expect(storage.session, 'sessionStorage المفروض فاضية').toBe(0);
-    expect(storage.cookies, 'مفيش كوكيز من غير auth').toBe('');
+    // كوكي الجلسة (cq_session_admin / cq_session_dealers — اسم مختلف لكل
+    // تطبيق، docs/AUTH.md) موجودة على مستوى الشبكة — بس httpOnly، فمفروض
+    // تبقى غير مقروءة من document.cookie خالص (I-4 · §2)
+    expect(storage.cookies, 'كوكي مقروءة من JS — لازم تبقى httpOnly').toBe('');
+
+    const cookies = await page.context().cookies();
+    const session = cookies.find((c) => c.name.startsWith('cq_session'));
+    expect(session, 'كوكي الجلسة (cq_session_*) مفروض تكون موجودة بعد الدخول').toBeTruthy();
+    expect(session?.httpOnly, 'كوكي الجلسة لازم تكون httpOnly').toBe(true);
+  });
+
+  test(`${name}: نداء لـ/api/session/refresh بـOrigin غريب بيترفض (المرحلة ٤ — دفاع CSRF إضافي)`, async ({
+    page,
+  }) => {
+    await open(page, base + '/');
+    // نفس الكوكيز الحقيقية (من الجلسة الجاهزة)، بس بـOrigin مزيّف —
+    // SameSite=Lax لوحده مش كفاية، isTrustedOrigin() في server/session.ts
+    // لازم يرفض الطلب ده بغض النظر عن الكوكي الصحيحة
+    const res = await page.request.post(`${base}/api/session/refresh`, {
+      headers: { origin: 'https://evil-site.example' },
+    });
+    expect(res.status()).toBe(403);
+
+    // ونفس الجلسة لسه شغالة عادي بعد كده — الرفض مؤقت لهذا الطلب بس
+    await page.reload({ waitUntil: 'networkidle' });
+    expect(page.url().startsWith(base)).toBe(true);
   });
 }
 
@@ -92,6 +126,24 @@ test('التليفونات مخفية في كل الجداول اللي بتعر
     const text = (await table.innerText()).replace(/[\s\u00A0]/g, '');
     expect(text, `رقم كامل مكشوف في ${path}`).not.toMatch(/01[0125]\d{8}/);
   }
+});
+
+test('طباعة الصفحة (Ctrl+P) بتخفي أي dialog مفتوح — مش باب خلفي لتنزيل بيانات حساسة (F-6)', async ({
+  page,
+}) => {
+  await open(page, ADMIN + '/exhibitions');
+  await page.locator('tr.cursor-pointer').first().locator('td').first().click();
+  await page.waitForURL(/\/exhibitions\/ex-/);
+
+  await page.getByRole('button', { name: /امنح التعاقد|أوقف التعاقد/ }).first().click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+
+  await page.emulateMedia({ media: 'print' });
+  await expect(dialog).toBeHidden();
+
+  await page.emulateMedia({ media: 'screen' });
+  await expect(dialog).toBeVisible();
 });
 
 test('روابط خارجية (لو فيه) لازم يكون معاها noopener', async ({ page }) => {

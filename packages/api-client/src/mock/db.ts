@@ -41,12 +41,55 @@ import type {
   StatsFilters,
   TimeseriesMetric,
   TimeseriesPoint,
+  Transmission,
   User,
   UserRole,
   UserStatus,
 } from '../types';
 import { ApiError } from '../errors';
+import { emitMockRealtimeEvent } from '../realtime';
 import { seed, ADMIN_USER, MOCK_NOW } from './seed';
+
+/**
+ * بتوقيت القاهرة إجباريًا لأي تجميع/فلترة بالتاريخ (X-2) — مصر بترجّع
+ * الصيفي من ٢٠٢٣، فالإزاحة عن UTC مش ثابتة. بنحسبها بـ`Intl` المدمجة
+ * بدل مكتبة خارجية (`date-fns-tz` بطيئة التحميل جوه Vitest — لاحظنا
+ * timeout حقيقي في `session.test.ts` أول ما اتضافت كـdependency جديدة).
+ */
+const CAIRO_TZ = 'Africa/Cairo';
+
+/** إزاحة القاهرة عن UTC بالدقايق في لحظة معيّنة (١٢٠ شتوي / ١٨٠ صيفي) */
+function cairoOffsetMinutes(utcGuess: Date): number {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: CAIRO_TZ,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    })
+      .formatToParts(utcGuess)
+      .map((p) => [p.type, p.value]),
+  );
+  const asUtc = Date.UTC(
+    Number(parts.year),
+    Number(parts.month) - 1,
+    Number(parts.day),
+    Number(parts.hour),
+    Number(parts.minute),
+    Number(parts.second),
+  );
+  return (asUtc - utcGuess.getTime()) / 60_000;
+}
+
+/** "yyyy-MM-ddTHH:mm:ss" (وقت حائط بتوقيت القاهرة) → لحظة UTC حقيقية */
+function cairoWallTimeToMs(isoLocal: string): number {
+  const guess = new Date(`${isoLocal}Z`);
+  return guess.getTime() - cairoOffsetMinutes(guess) * 60_000;
+}
 
 /* ═══════════════════════ الحالة ═══════════════════════ */
 
@@ -166,6 +209,79 @@ export function getListing(id: string): Listing {
   const l = db.listings.find((x) => x.id === id);
   if (!l) throw new ApiError('LISTING_NOT_FOUND', 'الإعلان مش موجود');
   return l;
+}
+
+/**
+ * نفس `getListing` بس **بفحص ملكية إجباري** — لازم تتنادى من أي مسار
+ * بوابة معارض (`dealers/hooks.ts`)، مش `getListing` الخام. `getListing`
+ * نفسها تفضل بلا فحص لأن الأدمن شرعي يشوف أي إعلان بحكم الدور
+ * (`admin/hooks.ts`) — الفرق مقصود، مش نسيان.
+ *
+ * ده إصلاح `FND-052` (IDOR, P0): معرض كان يقدر يفتح `/inventory/{id}`
+ * بتاع معرض تاني ويشوف بياناته كاملة بمجرد تغيير الـid في الـURL.
+ * **نفس الفحص ده لازم يتعمل سيرفر-سايد في الباك الحقيقي** —
+ * `docs/BACKEND-CONTRACT.md §6.0` بيوثّقه كمتطلب إلزامي؛ النسخة هنا
+ * مرجع تنفيذي للباك + إصلاح فعلي لوضع الموك نفسه.
+ */
+export function getOwnedListing(id: string, exhibitionId: string): Listing {
+  const l = getListing(id);
+  const ex = getExhibition(exhibitionId);
+  if (l.seller.id !== ex.userId) {
+    throw new ApiError('FORBIDDEN', 'الإعلان ده مش بتاع معرضك');
+  }
+  return l;
+}
+
+/**
+ * إنشاء إعلان جديد فعليًا في `db.listings` — مسار الإضافة الفردية
+ * (`/inventory/new`) والرفع بالجملة (`/inventory/bulk`) بيمرّوا هنا.
+ * بيتنشر `draft` دايمًا (D-2 — أول صورة هي اللي بتفعّله)، وبيتنسب
+ * لصاحب المعرض التجريبي الحالي عشان يظهر فورًا في `/inventory`
+ * و`getMyListings()`.
+ */
+export function createListing(payload: {
+  make: string;
+  model: string;
+  year: number;
+  price: number;
+  km: number;
+  transmission: Transmission;
+  body: string;
+  color: string;
+  governorate: string;
+  area: string;
+  description: string;
+}): Listing {
+  const seller = getUser(getDemoExhibition().userId);
+  const listing: Listing = {
+    id: `l-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    title: `${payload.make} ${payload.model}`,
+    make: payload.make,
+    model: payload.model,
+    year: payload.year,
+    price: payload.price,
+    marketAvg: null,
+    priceTag: null,
+    km: payload.km,
+    kmVerified: false,
+    inspected: false,
+    transmission: payload.transmission,
+    body: payload.body,
+    color: payload.color,
+    governorate: payload.governorate,
+    area: payload.area,
+    status: 'draft',
+    viewsCount: 0,
+    photosCount: 0,
+    imageUrl: null,
+    seller: { id: seller.id, name: seller.name, phone: seller.phone, role: seller.role },
+    description: payload.description,
+    publishedAt: null,
+    expiresAt: null,
+    createdAt: new Date().toISOString(),
+  };
+  db.listings.push(listing);
+  return listing;
 }
 
 /**
@@ -478,8 +594,60 @@ export function placeBid(
   if (remaining < 60_000 && a.extensionCount < 20) {
     a.endsAt = new Date(Date.now() + 60_000).toISOString();
     a.extensionCount += 1;
+    // الحدث بيوصل الأول عشان الشاشة تعرض «المزاد اتمدّ» على `endsAt` الجديد
+    // من غير ما تستنى `bid.placed` تفرّق بينهم (نفس الترتيب اللي WS حقيقي هيبعته)
+    emitMockRealtimeEvent('auction:' + auctionId, 'auction.extended', {
+      auctionId,
+      endsAt: a.endsAt,
+    });
   }
+
+  // `bidCount` من غير `s` — نفس تسمية §4.5 بالحرف، مش `Auction.bidsCount`
+  emitMockRealtimeEvent('auction:' + auctionId, 'bid.placed', {
+    auctionId,
+    bidId: bid.id,
+    exhibitionName: ex.name,
+    amount,
+    bidCount: a.bidsCount,
+    endsAt: a.endsAt,
+    createdAt: bid.createdAt,
+  });
+
   return { auction: a, bid };
+}
+
+/**
+ * `a-1` (المرحلة ٠ من `seed.ts`، `overdue = isLive && i === 0`) متعمّد
+ * إنه يفضل `live` بـ`endsAt` في الماضي **للأبد** — دي العينة اللي
+ * بتوري بانر «العامل الخلفي واقف» في `/health` وفي كل شاشة أدمن
+ * (`FND` قديمة من المرحلة ٠). لو الووركر تحت قفلها زي أي مزاد عادي،
+ * الفيكستشر ده بيتكسر بعد أول ٥ ثواني من تشغيل التطبيق — واللي
+ * بيختبر «الووركر واقف» هيلاقي مفيش مزاد متأخر أصلًا (اتلقط فعليًا:
+ * `admin.spec.ts` بدأ يفشل بعد ساعات من تشغيل نفس السيرفر — كل
+ * المزادات الـlive المتبقّية اتقفلت). الاستثناء ده مقصود ومستندله.
+ */
+const PERPETUALLY_OVERDUE_DEMO_AUCTION_ID = 'a-1';
+
+/**
+ * ووركر موك بسيط (`A-8`): بيقفل أي مزاد `live` عدّى ميعاده كل ٥ ثواني
+ * ويبعت `auction.ended`. **الشاشة نفسها ممنوع تقفل المزاد** — دي مسؤولية
+ * الووركر بس (حقيقي أو موك)، وده بالظبط اللي الحلقة دي بتقلّده.
+ */
+if (typeof window !== 'undefined') {
+  setInterval(() => {
+    const dueNow = Date.now();
+    for (const a of db.auctions) {
+      if (a.id === PERPETUALLY_OVERDUE_DEMO_AUCTION_ID) continue;
+      if (a.status !== 'live' || +new Date(a.endsAt) > dueNow) continue;
+      const winner = getAuctionBids(a.id)[0]; // الأحدث = الأعلى (bidStep ثابت وتصاعدي)
+      a.status = a.bidsCount > 0 ? 'settled' : 'failed';
+      a.winnerBidId = winner?.id ?? null;
+      emitMockRealtimeEvent('auction:' + a.id, 'auction.ended', {
+        auctionId: a.id,
+        status: a.status,
+      });
+    }
+  }, 5_000);
 }
 
 /** تسجيل الالتزام — **مش تحصيل فلوس**. الأدمن بيأكد التحويل. */
@@ -574,6 +742,10 @@ export function setFinancingStatus(
   f.status = status;
   f.reviewedBy = ADMIN_USER.id;
   f.reviewedAt = new Date().toISOString();
+  // الرفض بيقفل الطلب نهائيًا — الواجهة بتوعد المستخدم صراحة إن صور
+  // البطاقة بتتمسح من التخزين بعد القفل (F-6)، فده لازم يتحقق فعليًا
+  // مش يفضل معتمد على الصدفة في بيانات الـseed
+  if (status === 'rejected') f.idImagesDeletedAt = new Date().toISOString();
   audit('financing.status_changed', 'financing_application', id, { before, after: status, reason });
   return f;
 }
@@ -591,8 +763,13 @@ export function signIdImage(appId: string, side: 'front' | 'back'): SignedImageU
     side,
     key: side === 'front' ? f.idFrontKey : f.idBackKey,
   });
+  // في الحقيقي ده رابط موقّع (presigned S3 أو مشابه) بييجي من الباك
+  // مباشرة. مفيش تخزين حقيقي في الموك، فبنرجّع أصل ثابت محلي (placeholder
+  // — لقطنا في المرحلة ٧ إن مفيش أي رد فعلي كان بيتسجّل، والصورة كانت
+  // بترجع 404 دايمًا في وضع الديمو) بدل ما نبني route جديد فيه ألوان
+  // hex ثابتة (ممنوعة في طبقة الصفحات — static-checks.mjs::no-hex-in-pages).
   return {
-    url: `/api/private-preview?key=${encodeURIComponent(side === 'front' ? f.idFrontKey : f.idBackKey)}`,
+    url: '/id-card-placeholder.svg',
     expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
   };
 }
@@ -607,9 +784,18 @@ export function queryScanJobs(q: { status?: string; cursor?: string | null } = {
 }
 
 export function getHealth(): HealthSnapshot {
+  /**
+   * FND-036 — عتبات SLA هنا (طابور الفحص، فشل آخر ٢٤ ساعة، عروض/إعلانات
+   * منتهية) بتتقاس نسبةً للبيانات المولّدة (`seed.ts`)، فلازم تتحسب على
+   * ساعة الموك المجمّدة (`MOCK_NOW`) مش الوقت الحقيقي — وإلا كل عتبة
+   * بتتغيّر بصمت كل ما سيرفر التطوير يفضل شغّال ساعات/أيام أكتر (نفس جذر
+   * FND-056). `countOverdueAuctions`/`checkedAt` استثناء متعمّد — دول
+   * جزء من نظام المزادات اللايف اللي فعلًا محتاج وقت حقيقي متقدّم.
+   */
+  const now = MOCK_NOW;
   const queued = db.scanJobs.filter((s) => s.status === 'queued');
-  const oldest = queued.reduce((min, s) => Math.min(min, +new Date(s.createdAt)), Date.now());
-  const oldestSeconds = queued.length ? Math.round((Date.now() - oldest) / 1000) : 0;
+  const oldest = queued.reduce((min, s) => Math.min(min, +new Date(s.createdAt)), now);
+  const oldestSeconds = queued.length ? Math.round((now - oldest) / 1000) : 0;
   const active = db.listings.filter((l) => l.status === 'active');
   const unpriced = active.filter((l) => l.marketAvg === null).length;
 
@@ -619,14 +805,14 @@ export function getHealth(): HealthSnapshot {
     queuedScans: queued.length,
     oldestQueuedScanSeconds: oldestSeconds,
     failedScans24h: db.scanJobs.filter(
-      (s) => s.status === 'failed' && Date.now() - +new Date(s.createdAt) < DAY,
+      (s) => s.status === 'failed' && now - +new Date(s.createdAt) < DAY,
     ).length,
     overdueAuctions: countOverdueAuctions(),
     expiredSellNowOffers: db.sellNow.filter(
-      (r) => r.status === 'offered' && r.expiresAt !== null && +new Date(r.expiresAt) < Date.now(),
+      (r) => r.status === 'offered' && r.expiresAt !== null && +new Date(r.expiresAt) < now,
     ).length,
     expiredActiveListings: db.listings.filter(
-      (l) => l.status === 'active' && l.expiresAt !== null && +new Date(l.expiresAt) < Date.now(),
+      (l) => l.status === 'active' && l.expiresAt !== null && +new Date(l.expiresAt) < now,
     ).length,
     unpricedActivePct: active.length ? (unpriced / active.length) * 100 : 0,
     idempotencyKeys: 1840,
@@ -636,13 +822,44 @@ export function getHealth(): HealthSnapshot {
 
 /* ═══════════════════════ التدقيق ═══════════════════════ */
 
+/**
+ * FND-037 — فلترة الفاعل والتاريخ (`ADMIN §6.3` بند ٣: `?from=&to=&actor_id=`)
+ * كانت بحث نصي في الصفحة المعروضة بس (٣٠ صف)، مش على السجل كله. دلوقتي
+ * الفلترتين بتتطبّقوا هنا على `db.auditLog` كله **قبل** الترقيم — زي أي
+ * فلتر تاني في المشروع. `actor` بيدوّر بالاسم (مش لازم تعرف الـid)، وده
+ * أنسب لواجهة أدمن بيكتب اسم زميله؛ الباك الحقيقي حر يطابق بالـid أو
+ * الاسم طول ما البحث بيغطي السجل كله مش صفحة واحدة بس.
+ */
 export function queryAudit(
-  q: { entityType?: string; entityId?: string; action?: string; cursor?: string | null } = {},
+  q: {
+    entityType?: string;
+    entityId?: string;
+    action?: string;
+    actor?: string;
+    from?: string;
+    to?: string;
+    cursor?: string | null;
+  } = {},
 ): Page<AuditEntry> {
   let rows = db.auditLog;
   if (q.entityType && q.entityType !== 'all') rows = rows.filter((a) => a.entityType === q.entityType);
   if (q.entityId) rows = rows.filter((a) => a.entityId === q.entityId);
   if (q.action && q.action !== 'all') rows = rows.filter((a) => a.action === q.action);
+  if (q.actor?.trim()) {
+    const needle = q.actor.trim().toLowerCase();
+    rows = rows.filter((a) => a.actorName.toLowerCase().includes(needle));
+  }
+  if (q.from) {
+    // بداية اليوم بتوقيت القاهرة — بتحسب إزاحة الصيفي/الشتوي الصحيحة
+    // لتاريخ بعينه (X-2)، مش إزاحة ثابتة
+    const fromMs = cairoWallTimeToMs(`${q.from}T00:00:00`);
+    rows = rows.filter((a) => +new Date(a.createdAt) >= fromMs);
+  }
+  if (q.to) {
+    // آخر لحظة في يوم "إلى" نفسه بتوقيت القاهرة، مش أوله
+    const toMs = cairoWallTimeToMs(`${q.to}T23:59:59.999`);
+    rows = rows.filter((a) => +new Date(a.createdAt) <= toMs);
+  }
   return paginate(rows, q.cursor, 30);
 }
 
@@ -979,6 +1196,30 @@ export const DEMO_EXHIBITION_ID = 'ex-1';
 
 export function getDemoExhibition(): Exhibition {
   return getExhibition(DEMO_EXHIBITION_ID);
+}
+
+/**
+ * هوية الدخول في وضع الديمو — كل تطبيق بيطلب دور واحد بس افتراضيًا
+ * (المرحلة ٢): الأدمن دايمًا `ADMIN_USER`، والمعارض دايمًا صاحب
+ * `DEMO_EXHIBITION_ID`. مفيش تحقق حقيقي على الرقم/الكود في وضع الموك
+ * — القرار ده موثّق ومقصود (`DEMO_MODE` في `client.ts`)، مش نقص.
+ *
+ * **الاستثناء المتعمّد:** لو الرقم اللي اتكتب فعليًا رقم مستخدم حقيقي
+ * موجود في قاعدة الموك (بغض النظر عن دوره)، بنرجّع هويته الحقيقية —
+ * بالظبط زي ما باك اند حقيقي هيرجّع صاحب الرقم ده مهما كانت اللوحة
+ * اللي بيحاول يدخلها. ده اللي بيسمح تختبر «دخول مرفوض» (دور غلط)
+ * e2e فعليًا — مثلًا رقم `ADMIN_USER` (`01001234553`) في بوابة
+ * المعارض، أو رقم صاحب المعرض التجريبي (`01246830664`) في لوحة
+ * الأدمن — من غير ما يتغيّر سلوك الديمو الافتراضي لأي رقم تاني.
+ */
+export function getMockIdentity(role: UserRole, phone?: string): User {
+  const digits = phone?.replace(/\D/g, '');
+  if (digits) {
+    const existing = db.users.find((u) => u.phone.replace(/\D/g, '') === digits);
+    if (existing) return existing;
+  }
+  if (role === 'admin') return ADMIN_USER;
+  return getUser(getDemoExhibition().userId);
 }
 
 export function getMyListings(exhibitionId = DEMO_EXHIBITION_ID): Listing[] {

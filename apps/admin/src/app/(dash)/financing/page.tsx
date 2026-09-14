@@ -35,6 +35,7 @@ import {
 } from '@carq/ui';
 import {
   errorMessage,
+  nowMs,
   useBreakdown,
   useFinancingApps,
   useFunnel,
@@ -92,6 +93,9 @@ export default function FinancingPage() {
   const [tab, setTab] = useState<TabKey>('submitted');
   const [cursor, setCursor] = useState<string | null>(null);
   const [seen, setSeen] = useState<Array<string | null>>([]);
+  /** FND-036 — ثابتة على ساعة الموك المجمّدة عشان حساب SLA ما يتأثرش
+   * بمرور وقت التشغيل الفعلي. */
+  const now = new Date(nowMs());
 
   const apps = useFinancingApps(tab, cursor);
   const funnel = useFunnel('financing');
@@ -111,7 +115,7 @@ export default function FinancingPage() {
   };
 
   const lateCount = rows.filter(
-    (r) => r.status === 'submitted' && hoursSince(r.createdAt) >= SLA_HOURS,
+    (r) => r.status === 'submitted' && hoursSince(r.createdAt, now) >= SLA_HOURS,
   ).length;
 
   const columns: Array<Column<FinancingApplication>> = [
@@ -231,16 +235,16 @@ export default function FinancingPage() {
       header: 'مستني بقاله',
       align: 'center',
       sortable: true,
-      value: (r) => (r.status === 'submitted' ? Math.round(hoursSince(r.createdAt)) : 0),
+      value: (r) => (r.status === 'submitted' ? Math.round(hoursSince(r.createdAt, now)) : 0),
       render: (r) => {
         if (r.status === 'submitted') {
-          const late = hoursSince(r.createdAt) >= SLA_HOURS;
+          const late = hoursSince(r.createdAt, now) >= SLA_HOURS;
           return (
             <span
               className={cn('tnum font-extrabold', late ? 'text-crit' : 'text-content-sub')}
               title={late ? 'عدّى الـ٢٤ ساعة اللي وعدنا العميل بيها' : undefined}
             >
-              {waitingFor(r.createdAt)}
+              {waitingFor(r.createdAt, now)}
             </span>
           );
         }
@@ -345,6 +349,7 @@ export default function FinancingPage() {
         />
 
         <DataTable
+          caption="جدول طلبات التمويل"
           rows={rows}
           columns={columns}
           rowKey={(r) => r.id}
@@ -355,7 +360,9 @@ export default function FinancingPage() {
           emptyHint="أول ما عميل يقدّم طلب تمويل من التطبيق هيظهر هنا على طول."
           onRowClick={(r) => router.push(`/financing/${r.id}`)}
           rowTone={(r) =>
-            r.status === 'submitted' && hoursSince(r.createdAt) >= SLA_HOURS ? 'crit' : undefined
+            r.status === 'submitted' && hoursSince(r.createdAt, now) >= SLA_HOURS
+              ? 'crit'
+              : undefined
           }
           searchable
           searchPlaceholder="دوّر باسم مقدّم الطلب أو العربية…"

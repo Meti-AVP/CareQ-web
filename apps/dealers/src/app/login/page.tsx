@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
-import { ArrowLeft, ArrowRight, Gavel, Phone, ShieldCheck, Store } from 'lucide-react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { ArrowLeft, ArrowRight, Chrome, Gavel, Phone, ShieldCheck, Store } from 'lucide-react';
 import {
   Button,
   Field,
@@ -12,14 +12,28 @@ import {
   formatPhone,
   withThousands,
 } from '@carq/ui';
+import { errorMessage, requestOtp as apiRequestOtp, verifyOtp as apiVerifyOtp, DEMO_MODE } from '@carq/api-client';
 import { isEgyptianPhone, westernDigits } from '@/lib/catalog';
+
+/** رسايل `?error=` الراجعة من `/api/auth/google/callback` — نص عربي جاهز للعرض */
+const GOOGLE_ERROR_MESSAGES: Record<string, string> = {
+  google_not_configured: 'الدخول بجوجل لسه مش متظبط على السيرفر — استخدم كود التليفون.',
+  google_demo_closed: 'وضع الديمو مقفول لدخول جوجل حاليًا — استخدم كود التليفون.',
+  google_cancelled: 'اتلغى الدخول بجوجل.',
+  google_forbidden: 'الحساب ده مش مصرّح له.',
+  google_failed: 'حصل خطأ في الدخول بجوجل — جرّب تاني أو استخدم كود التليفون.',
+};
 
 /**
  * ════════════════════════════════════════════════════════════════
- * `/login` — دخول بوابة المعارض
+ * `/login` — دخول بوابة المعارض (المرحلة ٢ — مبنية)
  *
  * نفس فلو الموبايل بالظبط: تليفون ثم كود OTP. مفيش باسورد عن قصد —
  * المعرض بيدخل بنفس الرقم اللي بيستقبل عليه الاستفسارات.
+ *
+ * `requestOtp`/`verifyOtp` من `@carq/api-client` (`auth.ts`) — نفس
+ * الفلو الحقيقي (`POST /v1/auth/otp/request` ثم `/verify`، `PORTAL §8.1`).
+ * لو الحساب مش `exhibition`، الدخول بيترفض من غير تفاصيل.
  *
  * الهوية: نص كحلي ونص أبيض. الكحلي هو اللي بيقول إنت فين، والأبيض
  * هو اللي بتشتغل فيه.
@@ -28,14 +42,33 @@ import { isEgyptianPhone, westernDigits } from '@/lib/catalog';
 
 const RESEND_SECONDS = 30;
 
+/** `useSearchParams()` محتاجة Suspense boundary عشان الصفحة تفضل static-prerendered */
 export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginForm />
+    </Suspense>
+  );
+}
+
+function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  /** مسار الرجوع بعد الدخول — middleware.ts بيحطه لما يمنع وصول مباشر.
+      لازم مسار داخلي (`/xxx`) بس — غير كده ده باب open-redirect. */
+  const rawNext = searchParams.get('next') ?? '';
+  const next = rawNext.startsWith('/') && !rawNext.startsWith('//') ? rawNext : '/';
+  const googleError = searchParams.get('error');
+
   const [step, setStep] = useState<'phone' | 'code'>('phone');
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState('');
   const [touched, setTouched] = useState(false);
   const [sending, setSending] = useState(false);
   const [left, setLeft] = useState(0);
+  const [error, setError] = useState<string | null>(
+    googleError ? (GOOGLE_ERROR_MESSAGES[googleError] ?? GOOGLE_ERROR_MESSAGES.google_failed!) : null,
+  );
 
   useEffect(() => {
     if (left <= 0) return;
@@ -46,26 +79,37 @@ export default function LoginPage() {
   const phoneOk = isEgyptianPhone(phone);
   const codeOk = westernDigits(code).replace(/\D/g, '').length === 6;
 
-  const requestCode = () => {
+  const requestCode = async () => {
     setTouched(true);
     if (!phoneOk) return;
+    setError(null);
     setSending(true);
-    window.setTimeout(() => {
-      setSending(false);
+    try {
+      await apiRequestOtp(phone);
       setStep('code');
       setTouched(false);
       setLeft(RESEND_SECONDS);
-    }, 600);
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setSending(false);
+    }
   };
 
-  const verify = () => {
+  const verify = async () => {
     setTouched(true);
     if (!codeOk) return;
+    setError(null);
     setSending(true);
-    window.setTimeout(() => {
+    try {
+      // لو role !== 'exhibition': verifyOtp بترمي خطأ من غير ما تقول
+      // إن فيه بوابة أصلًا
+      await apiVerifyOtp(phone, westernDigits(code).replace(/\D/g, ''), 'exhibition');
+      router.push(next);
+    } catch (e) {
+      setError(errorMessage(e));
       setSending(false);
-      router.push('/');
-    }, 700);
+    }
   };
 
   return (
@@ -134,14 +178,21 @@ export default function LoginPage() {
                 <Field
                   label="تليفون المعرض"
                   required
-                  error={touched && !phoneOk ? 'اكتب رقم مصري صحيح — موبايل أو أرضي' : undefined}
+                  error={
+                    touched && !phoneOk
+                      ? 'رقم موبايل مصري صحيح (010/011/012/015)'
+                      : (error ?? undefined)
+                  }
                   hint="نفس الرقم اللي بيستقبل استفسارات المشترين"
                 >
                   <Input
                     value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
+                    onChange={(e) => {
+                      setPhone(e.target.value);
+                      if (error) setError(null);
+                    }}
                     onKeyDown={(e) => {
-                      if (e.key === 'Enter') requestCode();
+                      if (e.key === 'Enter') void requestCode();
                     }}
                     inputMode="tel"
                     autoComplete="tel"
@@ -154,13 +205,25 @@ export default function LoginPage() {
                 <Button
                   className="w-full"
                   size="lg"
-                  onClick={requestCode}
+                  onClick={() => void requestCode()}
                   loading={sending}
                   iconEnd={<ArrowLeft />}
                 >
                   ابعت الكود
                 </Button>
               </div>
+
+              {/* ───────── بديل: الدخول بجوجل — خيار إضافي جنب الكود، مش بدل منه ───────── */}
+              <div className="my-6 flex items-center gap-3" aria-hidden="true">
+                <span className="h-px flex-1 bg-line" />
+                <span className="text-caption text-content-faint">أو</span>
+                <span className="h-px flex-1 bg-line" />
+              </div>
+              <a href="/api/auth/google" className="block">
+                <Button type="button" variant="outline" size="lg" className="w-full" icon={<Chrome />}>
+                  الدخول بحساب Google
+                </Button>
+              </a>
 
               <div className="mt-8 rounded-md border border-line bg-surface px-4 py-3.5">
                 <p className="text-sub font-bold text-content">لسه مش معرض؟</p>
@@ -182,6 +245,7 @@ export default function LoginPage() {
                   setStep('phone');
                   setCode('');
                   setTouched(false);
+                  setError(null);
                 }}
                 className="mb-4 inline-flex items-center gap-1.5 text-sub font-bold text-content-sub transition-colors hover:text-content"
               >
@@ -199,13 +263,16 @@ export default function LoginPage() {
                 <Field
                   label="كود التأكيد"
                   required
-                  error={touched && !codeOk ? 'الكود ٦ أرقام' : undefined}
+                  error={touched && !codeOk ? 'الكود ٦ أرقام' : (error ?? undefined)}
                 >
                   <Input
                     value={code}
-                    onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    onChange={(e) => {
+                      setCode(e.target.value.replace(/\D/g, '').slice(0, 6));
+                      if (error) setError(null);
+                    }}
                     onKeyDown={(e) => {
-                      if (e.key === 'Enter') verify();
+                      if (e.key === 'Enter') void verify();
                     }}
                     inputMode="numeric"
                     autoComplete="one-time-code"
@@ -219,7 +286,7 @@ export default function LoginPage() {
                 <Button
                   className="w-full"
                   size="lg"
-                  onClick={verify}
+                  onClick={() => void verify()}
                   loading={sending}
                   iconEnd={<ArrowLeft />}
                 >
@@ -229,17 +296,23 @@ export default function LoginPage() {
                 <button
                   type="button"
                   disabled={left > 0}
-                  onClick={() => setLeft(RESEND_SECONDS)}
+                  onClick={() => {
+                    void apiRequestOtp(phone);
+                    setLeft(RESEND_SECONDS);
+                    setError(null);
+                  }}
                   className="w-full text-center text-sub font-bold text-content-sub transition-colors hover:text-content disabled:opacity-50"
                 >
                   {left > 0 ? `تقدر تطلب كود جديد بعد ${withThousands(left)} ثانية` : 'ابعت الكود تاني'}
                 </button>
               </div>
 
-              <p className="mt-8 text-caption text-content-faint">
-                في النسخة التجريبية أي ٦ أرقام بتدخّلك. الربط الحقيقي بـ /v1/auth/otp/verify بيحصل
-                مع أول وصل بالباك اند.
-              </p>
+              {DEMO_MODE ? (
+                <p className="mt-8 text-caption text-content-faint">
+                  في النسخة التجريبية أي ٦ أرقام بتدخّلك. الربط الحقيقي بـ /v1/auth/otp/verify بيحصل
+                  مع أول وصل بالباك اند.
+                </p>
+              ) : null}
             </>
           )}
         </div>

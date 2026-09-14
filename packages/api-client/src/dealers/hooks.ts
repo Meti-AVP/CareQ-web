@@ -10,9 +10,11 @@
  *  · حالة المزاد `staleTime: 0` — ممنوع كاش خالص (§10.7)
  * ════════════════════════════════════════════════════════════════
  */
+import { useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as mock from '../mock/db';
-import { http, USE_MOCK, idempotencyKey } from '../client';
+import { http, USE_MOCK, IdempotencyKeyCache, visibleRefetchInterval } from '../client';
+import { useRealtime } from '../realtime';
 import type {
   ApplicationStatus,
   Auction,
@@ -32,6 +34,11 @@ async function m<T>(fn: () => T, ms = 120): Promise<T> {
   return fn();
 }
 
+/** نسخة واحدة من `IdempotencyKeyCache` تفضل ثابتة عبر إعادة الرندر (X-3) */
+function useStableIdempotencyKey(prefix: string): IdempotencyKeyCache {
+  return useRef(new IdempotencyKeyCache(prefix)).current;
+}
+
 /* ═══════════════════════ المعرض الحالي ═══════════════════════ */
 
 export function useMyExhibition() {
@@ -40,6 +47,14 @@ export function useMyExhibition() {
     queryFn: () =>
       USE_MOCK ? m(() => mock.getDemoExhibition()) : http<Exhibition>('/v1/exhibitions/me'),
     refetchOnWindowFocus: true,
+    /**
+     * `isContracted`/`verified` قرار أدمن بيتغيّر من شاشة تانية بالكامل
+     * (`/exhibitions/[id]`) — مفيش موضوع WS ليه (`docs/REALTIME.md`،
+     * `MISSION §6` بند ٥: «مش واضح ليه موضوع» صراحة). بولينج خفيف بدل
+     * الانتظار لحد `refetchOnWindowFocus` — نفس القيمة المستخدمة في
+     * `useExhibitionStats` المشابهة لها.
+     */
+    refetchInterval: visibleRefetchInterval(60_000),
   });
 }
 
@@ -81,7 +96,7 @@ export function useExhibitionStats() {
       USE_MOCK
         ? m(() => mock.getExhibitionStats())
         : http<ExhibitionStats>('/v1/me/exhibition/stats'),
-    refetchInterval: 300_000,
+    refetchInterval: visibleRefetchInterval(300_000),
   });
 }
 
@@ -98,10 +113,18 @@ export function useMyListings() {
   });
 }
 
+/**
+ * إعلان واحد لفورم التعديل. `getOwnedListing` (مش `getListing` الخام)
+ * — فحص ملكية إجباري (`FND-052`, P0): إعلان معرض تاني برجع `FORBIDDEN`
+ * مش بياناته كاملة. تفاصيل `docs/BACKEND-CONTRACT.md §6.0`.
+ */
 export function useMyListing(id: string) {
   return useQuery<Listing>({
     queryKey: ['dealer', 'listings', id],
-    queryFn: () => (USE_MOCK ? m(() => mock.getListing(id)) : http<Listing>(`/v1/listings/${id}`)),
+    queryFn: () =>
+      USE_MOCK
+        ? m(() => mock.getOwnedListing(id, mock.DEMO_EXHIBITION_ID))
+        : http<Listing>(`/v1/listings/${id}`),
     enabled: Boolean(id),
   });
 }
@@ -112,6 +135,8 @@ export function useMyListing(id: string) {
  */
 export function useCreateListing() {
   const qc = useQueryClient();
+  // كل استمارة إنشاء عندها عملية منطقية واحدة معلّقة في نفس اللحظة
+  const keys = useStableIdempotencyKey('listing');
   return useMutation({
     mutationFn: (payload: Record<string, unknown>) =>
       USE_MOCK
@@ -120,13 +145,20 @@ export function useCreateListing() {
             method: 'POST',
             body: payload,
             // إجباري: من غيره إعادة المحاولة بتنشر العربية مرتين (X-3)
-            idempotency: idempotencyKey('listing'),
+            idempotency: keys.get('pending'),
           }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['dealer', 'listings'] }),
+    onSuccess: () => {
+      keys.clear('pending');
+      qc.invalidateQueries({ queryKey: ['dealer', 'listings'] });
+    },
   });
 }
 
-/** رفع بالجملة — مفتاح idempotency **مستقل لكل صف** (X-3) */
+/**
+ * رفع بالجملة — مفتاح idempotency **مستقل لكل صف** (X-3). بترجّع
+ * `listingId` لكل صف ناجح (مش بس `ok: true`) — عشان خطوة ربط الصور
+ * بعد الإرسال (`PORTAL §4.3`) تقدر تربط كل صورة بالإعلان الصح.
+ */
 export function useBulkCreate() {
   const qc = useQueryClient();
   return useMutation({
@@ -137,9 +169,10 @@ export function useBulkCreate() {
     }: {
       rows: Array<Record<string, unknown>>;
       uploadId: string;
-      onProgress?: (index: number, ok: boolean, error?: string) => void;
+      onProgress?: (index: number, ok: boolean, error?: string, listingId?: string) => void;
     }) => {
-      const results: Array<{ index: number; ok: boolean; error?: string }> = [];
+      const results: Array<{ index: number; ok: boolean; error?: string; listingId?: string }> =
+        [];
       // بحد أقصى ٥ متوازيين — نفس توصية §4.3
       for (let i = 0; i < rows.length; i += 5) {
         const chunk = rows.slice(i, i + 5);
@@ -147,15 +180,23 @@ export function useBulkCreate() {
           chunk.map(async (row, j) => {
             const index = i + j;
             try {
-              if (USE_MOCK) await mock.latency(220);
-              else
-                await http('/v1/listings', {
+              let listingId: string;
+              if (USE_MOCK) {
+                await mock.latency(220);
+                // الشكل مضمون من bulk/page.tsx (نفس حقول createListing بالظبط)
+                listingId = mock.createListing(
+                  row as Parameters<typeof mock.createListing>[0],
+                ).id;
+              } else {
+                const created = await http<{ id: string }>('/v1/listings', {
                   method: 'POST',
                   body: row,
                   idempotency: `bulk-${uploadId}-${index}`,
                 });
-              results.push({ index, ok: true });
-              onProgress?.(index, true);
+                listingId = created.id;
+              }
+              results.push({ index, ok: true, listingId });
+              onProgress?.(index, true, undefined, listingId);
             } catch (e) {
               const msg = e instanceof Error ? e.message : 'فشل غير معروف';
               results.push({ index, ok: false, error: msg });
@@ -177,12 +218,25 @@ export function useMyLeads() {
     queryKey: ['dealer', 'leads'],
     queryFn: () =>
       USE_MOCK ? m(() => mock.getMyChats()) : http<{ items: ChatThread[] }>('/v1/chats').then((r) => r.items),
-    refetchInterval: 60_000,
+    refetchInterval: visibleRefetchInterval(60_000),
   });
 }
 
-/** رسايل محادثة واحدة — بولينج قصير وهي مفتوحة لحد ما WS يتركب */
+/**
+ * رسايل محادثة واحدة. الموضوع `chat:{thread_id}` **موجود فعليًا** في
+ * الباك (`R-1`)، لكن شكل حمولة حدث الرسالة **مش موصوف** في أي مواصفة
+ * وصلتنا (خلاف `auction:{id}` اللي §4.5 بتوصفه بالحرف) — فبدل ما
+ * نخترع اسم/شكل حدث، أي إطار بيوصل على الموضوع ده بيتعامل معاه كـ
+ * "تغيّر حاجة، اسحب تاني" (إبطال كاش) مش قراءة حمولته مباشرة. لما
+ * الباك يوثّق شكل الحدث، السطر ده بيتحول لتحديث كاش مباشر زي المزاد
+ * من غير ما يحتاج شاشة تتغيّر (`docs/REALTIME.md`).
+ */
 export function useLeadMessages(threadId: string | null) {
+  const qc = useQueryClient();
+  useRealtime(threadId ? `chat:${threadId}` : null, () => {
+    qc.invalidateQueries({ queryKey: ['dealer', 'lead-messages', threadId] });
+    qc.invalidateQueries({ queryKey: ['dealer', 'leads'] });
+  });
   return useQuery<ChatMessage[]>({
     queryKey: ['dealer', 'lead-messages', threadId],
     enabled: Boolean(threadId),
@@ -190,7 +244,8 @@ export function useLeadMessages(threadId: string | null) {
       USE_MOCK
         ? m(() => mock.getThreadMessages(threadId!))
         : http<{ items: ChatMessage[] }>(`/v1/chats/${threadId}/messages`).then((r) => r.items),
-    refetchInterval: 10_000,
+    // بولينج خفيف كشبكة أمان — الموضوع موجود بس شكل حدثه مش موصوف (فوق)
+    refetchInterval: visibleRefetchInterval(10_000),
   });
 }
 
@@ -209,6 +264,9 @@ export function useMarkLeadRead() {
 /** رد المعرض من البوابة — بيحدّث المحادثة ومؤشر أول رد */
 export function useSendLeadMessage() {
   const qc = useQueryClient();
+  // العملية بتتحدد بمحتوى الرسالة نفسه — رسالتين بنص مختلف = عمليتين مختلفتين،
+  // نفس النص المتكرر بعد فشل = إعادة محاولة لازم تاخد نفس المفتاح
+  const keys = useStableIdempotencyKey('chat');
   return useMutation({
     mutationFn: ({ threadId, body }: { threadId: string; body: string }) =>
       USE_MOCK
@@ -216,9 +274,10 @@ export function useSendLeadMessage() {
         : http<ChatMessage>(`/v1/chats/${threadId}/messages`, {
             method: 'POST',
             body: { body },
-            idempotency: idempotencyKey(`chat-${threadId}`),
+            idempotency: keys.get(`${threadId}:${body}`),
           }),
-    onSuccess: (_msg, { threadId }) => {
+    onSuccess: (_msg, { threadId, body }) => {
+      keys.clear(`${threadId}:${body}`);
       void qc.invalidateQueries({ queryKey: ['dealer', 'lead-messages', threadId] });
       void qc.invalidateQueries({ queryKey: ['dealer', 'leads'] });
     },
@@ -227,6 +286,7 @@ export function useSendLeadMessage() {
 
 /* ═══════════════════════ المزادات ═══════════════════════ */
 
+/** قايمة المزادات — لسه polling، مفيش موضوع WS لقايمة كل المزادات (بس واحد لكل مزاد لوحده) */
 export function useDealerAuctions(status = 'live') {
   return useQuery<Auction[]>({
     queryKey: ['dealer', 'auctions', status],
@@ -236,11 +296,20 @@ export function useDealerAuctions(status = 'live') {
         : http<{ items: Auction[] }>(`/v1/auctions?status=${status}`).then((r) => r.items),
     // ممنوع كاش على أي حاجة تخص المزايدة
     staleTime: 0,
-    refetchInterval: 15_000,
+    refetchInterval: visibleRefetchInterval(15_000),
     refetchOnWindowFocus: true,
   });
 }
 
+/**
+ * حالة مزاد واحد. **مفيش `refetchInterval` هنا تاني** — القراءة REST
+ * بتحصل مرة عند فتح الشاشة (`staleTime:0` بيضمن مفيش كاش قديم)،
+ * وبعد كده `useRealtime('auction:{id}')` في `/auctions/[id]` هو اللي
+ * بيحدّث الكاش مباشرة من أحداث `bid.placed`/`auction.extended`/
+ * `auction.ended` (§4.5 بند ١: REST الأول، WS بعدين — WS بيكمّل
+ * مابيبدأش). لو الاتصال اتقطع، الشاشة بتعرض بانر + زرار تحديث يدوي —
+ * **مش polling تلقائي بديل** (§4.5 بند ٢، `docs/REALTIME.md`).
+ */
 export function useDealerAuction(id: string) {
   return useQuery<Auction>({
     queryKey: ['dealer', 'auctions', 'one', id],
@@ -255,10 +324,10 @@ export function useDealerAuction(id: string) {
         : http<Auction>(`/v1/auctions/${id}`),
     enabled: Boolean(id),
     staleTime: 0,
-    refetchInterval: 10_000,
   });
 }
 
+/** نفس منطق `useDealerAuction` — WS بيكمّل، مش polling (فوق) */
 export function useDealerBids(auctionId: string) {
   return useQuery<AuctionBid[]>({
     queryKey: ['dealer', 'auctions', auctionId, 'bids'],
@@ -268,7 +337,6 @@ export function useDealerBids(auctionId: string) {
         : http<AuctionBid[]>(`/v1/auctions/${auctionId}/bids`),
     enabled: Boolean(auctionId),
     staleTime: 0,
-    refetchInterval: 10_000,
   });
 }
 
@@ -279,6 +347,8 @@ export function useDealerBids(auctionId: string) {
  */
 export function usePlaceBid() {
   const qc = useQueryClient();
+  // مزايدة بمبلغ مختلف = عملية جديدة؛ إعادة محاولة بنفس المبلغ = نفس المفتاح
+  const keys = useStableIdempotencyKey('bid');
   return useMutation({
     mutationFn: ({ auctionId, amount }: { auctionId: string; amount: number }) =>
       USE_MOCK
@@ -294,9 +364,10 @@ export function usePlaceBid() {
         : http<{ auction: Auction; bid: AuctionBid }>(`/v1/auctions/${auctionId}/bids`, {
             method: 'POST',
             body: { amount },
-            idempotency: idempotencyKey(`bid-${auctionId}`),
+            idempotency: keys.get(`${auctionId}:${amount}`),
           }),
     onSuccess: (_d, vars) => {
+      keys.clear(`${vars.auctionId}:${vars.amount}`);
       qc.invalidateQueries({ queryKey: ['dealer', 'auctions'] });
       qc.invalidateQueries({ queryKey: ['dealer', 'auctions', vars.auctionId, 'bids'] });
     },
@@ -306,21 +377,29 @@ export function usePlaceBid() {
 /** تسجيل الالتزام بدخول المزاد — **مش دفع**. الأدمن بيأكد التحويل. */
 export function useCreateEntry() {
   const qc = useQueryClient();
+  const keys = useStableIdempotencyKey('entry');
   return useMutation({
     mutationFn: ({ auctionId }: { auctionId: string }) =>
       USE_MOCK
         ? m(() => mock.createEntry(auctionId, mock.DEMO_EXHIBITION_ID), 500)
         : http<AuctionEntry>(`/v1/auctions/${auctionId}/entry`, {
             method: 'POST',
-            idempotency: idempotencyKey(`entry-${auctionId}`),
+            idempotency: keys.get(auctionId),
           }),
-    onSuccess: () => {
+    onSuccess: (_d, { auctionId }) => {
+      keys.clear(auctionId);
       qc.invalidateQueries({ queryKey: ['dealer', 'auctions'] });
       qc.invalidateQueries({ queryKey: ['dealer', 'entries'] });
     },
   });
 }
 
+/**
+ * `entry.paidAt` جزء مباشر من شرط المزايدة الثالث (A-1) — نفس معاملة
+ * `useDealerAuction`/`useDealerBids` (`staleTime: 0` + polling) عشان
+ * تأكيد دفع الأدمن يوصل للمزايد وهو قاعد في الغرفة، مش بس عند
+ * التركيز على النافذة (PORTAL §10.7).
+ */
 export function useMyEntries() {
   return useQuery<AuctionEntry[]>({
     queryKey: ['dealer', 'entries'],
@@ -328,6 +407,8 @@ export function useMyEntries() {
       USE_MOCK
         ? m(() => mock.getMyEntries())
         : http<{ items: AuctionEntry[] }>('/v1/me/exhibition/entries').then((r) => r.items),
+    staleTime: 0,
+    refetchInterval: visibleRefetchInterval(10_000),
   });
 }
 
@@ -355,7 +436,7 @@ export function useUpdateListing() {
     mutationFn: ({ id, patch }: { id: string; patch: Record<string, unknown> }) =>
       USE_MOCK
         ? m(() => {
-            const l = mock.getListing(id);
+            const l = mock.getOwnedListing(id, mock.DEMO_EXHIBITION_ID);
             Object.assign(l, patch);
             return l;
           }, 520)
@@ -367,58 +448,70 @@ export function useUpdateListing() {
 /** تعليم متباع. بيتلغي بـ`/reactivate` (L-13) — مش قرار نهائي. */
 export function useMarkListingSold() {
   const qc = useQueryClient();
+  const keys = useStableIdempotencyKey('sold');
   return useMutation({
     mutationFn: ({ id }: { id: string }) =>
       USE_MOCK
         ? m(() => {
-            const l = mock.getListing(id);
+            const l = mock.getOwnedListing(id, mock.DEMO_EXHIBITION_ID);
             l.status = 'sold';
             return l;
           }, 480)
         : http<Listing>(`/v1/listings/${id}/sold`, {
             method: 'POST',
-            idempotency: idempotencyKey(`sold-${id}`),
+            idempotency: keys.get(id),
           }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['dealer', 'listings'] }),
+    onSuccess: (_d, { id }) => {
+      keys.clear(id);
+      qc.invalidateQueries({ queryKey: ['dealer', 'listings'] });
+    },
   });
 }
 
 /** L-13: «اتباعت» مش قرار نهائي — بترجع نشطة بنفس بياناتها */
 export function useReactivateListing() {
   const qc = useQueryClient();
+  const keys = useStableIdempotencyKey('reactivate');
   return useMutation({
     mutationFn: ({ id }: { id: string }) =>
       USE_MOCK
         ? m(() => {
-            const l = mock.getListing(id);
+            const l = mock.getOwnedListing(id, mock.DEMO_EXHIBITION_ID);
             if (l.status === 'sold') l.status = 'active';
             return l;
           }, 480)
         : http<Listing>(`/v1/listings/${id}/reactivate`, {
             method: 'POST',
-            idempotency: idempotencyKey(`reactivate-${id}`),
+            idempotency: keys.get(id),
           }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['dealer', 'listings'] }),
+    onSuccess: (_d, { id }) => {
+      keys.clear(id);
+      qc.invalidateQueries({ queryKey: ['dealer', 'listings'] });
+    },
   });
 }
 
 /** تجديد — TTL ٣٠ يوم جديدة من ساعة التجديد (L-6) */
 export function useRenewListing() {
   const qc = useQueryClient();
+  const keys = useStableIdempotencyKey('renew');
   return useMutation({
     mutationFn: ({ id }: { id: string }) =>
       USE_MOCK
         ? m(() => {
-            const l = mock.getListing(id);
+            const l = mock.getOwnedListing(id, mock.DEMO_EXHIBITION_ID);
             l.expiresAt = new Date(Date.now() + 30 * 86_400_000).toISOString();
             if (l.status === 'expired') l.status = 'active';
             return l;
           }, 480)
         : http<Listing>(`/v1/listings/${id}/renew`, {
             method: 'POST',
-            idempotency: idempotencyKey(`renew-${id}`),
+            idempotency: keys.get(id),
           }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['dealer', 'listings'] }),
+    onSuccess: (_d, { id }) => {
+      keys.clear(id);
+      qc.invalidateQueries({ queryKey: ['dealer', 'listings'] });
+    },
   });
 }
 
@@ -429,7 +522,7 @@ export function useDeleteListing() {
     mutationFn: ({ id }: { id: string }) =>
       USE_MOCK
         ? m(() => {
-            const l = mock.getListing(id);
+            const l = mock.getOwnedListing(id, mock.DEMO_EXHIBITION_ID);
             l.status = 'removed';
             return l;
           }, 480)
@@ -444,9 +537,13 @@ export function useDeleteListing() {
  */
 export function useUploadListingPhoto() {
   const qc = useQueryClient();
+  // كل صورة عملية منفصلة — الاسم+الحجم بيميّزوا الصورة عن باقي صور نفس
+  // الإعلان؛ نفس الملف بالظبط بيتراجع لو نفس النداء اتكرر بعد فشل
+  const keys = useStableIdempotencyKey('photo');
   return useMutation({
-    mutationFn: ({ id }: { id: string; file?: File }) =>
-      USE_MOCK
+    mutationFn: ({ id, file }: { id: string; file?: File }) => {
+      const disambiguator = `${id}:${file?.name ?? ''}:${file?.size ?? 0}`;
+      return USE_MOCK
         ? m(() => {
             const l = mock.mockDb.listings.find((x) => x.id === id);
             // الإعلان المتعمل لسه في الديمو مش متسجّل في الموك — نجاح صامت
@@ -461,11 +558,22 @@ export function useUploadListingPhoto() {
             }
             return { activated: wasDraft };
           }, 900)
-        : http<{ activated: boolean }>(`/v1/listings/${id}/photos`, {
-            method: 'POST',
-            idempotency: idempotencyKey(`photo-${id}`),
-          }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['dealer', 'listings'] }),
+        : (() => {
+            // FND-٠٤١ (المرحلة ٥): كان بيبعت الـidempotency-key بس من غير
+            // بايتات الصورة خالص — رفع صورة حقيقي مكنش بيوصل للباك اند أبدًا
+            const form = new FormData();
+            if (file) form.append('photo', file, file.name);
+            return http<{ activated: boolean }>(`/v1/listings/${id}/photos`, {
+              method: 'POST',
+              body: form,
+              idempotency: keys.get(disambiguator),
+            });
+          })();
+    },
+    onSuccess: (_d, { id, file }) => {
+      keys.clear(`${id}:${file?.name ?? ''}:${file?.size ?? 0}`);
+      qc.invalidateQueries({ queryKey: ['dealer', 'listings'] });
+    },
   });
 }
 

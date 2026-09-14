@@ -35,6 +35,7 @@ import {
 } from '@carq/ui';
 import {
   errorMessage,
+  nowMs,
   useAuctionEntries,
   useAuctions,
   useExhibitions,
@@ -74,8 +75,12 @@ const VERIFIED_FILTER = [
 
 const triToBool = (v: TriFilter) => (v === 'all' ? undefined : v === 'yes');
 
-/** الأيام الباقية في العقد — من `contractEndsAt` نفسه */
-const daysLeft = (endsAt: string) => Math.floor(secondsUntil(endsAt) / 86_400);
+/**
+ * الأيام الباقية في العقد — من `contractEndsAt` نفسه. FND-036 — ثابتة على
+ * ساعة الموك المجمّدة عشان قائمة «هتنتهي قريب» ما تتغيّرش بصمت بمرور وقت
+ * تشغيل السيرفر الفعلي.
+ */
+const daysLeft = (endsAt: string) => Math.floor(secondsUntil(endsAt, new Date(nowMs())) / 86_400);
 
 export default function ExhibitionsPage() {
   const router = useRouter();
@@ -86,6 +91,8 @@ export default function ExhibitionsPage() {
   const [search, setSearch] = useState('');
   const [q, setQ] = useState('');
   const [target, setTarget] = useState<Exhibition | null>(null);
+  /** FND-036 — ثابتة على ساعة الموك المجمّدة، مش الوقت الحقيقي. */
+  const now = new Date(nowMs());
 
   /** الصفحات بالـcursor — مكدّس عشان زرار «السابق» يشتغل صح */
   const [cursor, setCursor] = useState<string | null>(null);
@@ -282,7 +289,7 @@ export default function ExhibitionsPage() {
       value: (e) => e.lastActiveAt ?? '',
       render: (e) => (
         <span className="whitespace-nowrap text-content-sub">
-          {e.lastActiveAt ? relTimeAr(e.lastActiveAt) : 'مفيش نشاط'}
+          {e.lastActiveAt ? relTimeAr(e.lastActiveAt, now) : 'مفيش نشاط'}
         </span>
       ),
     },
@@ -401,6 +408,7 @@ export default function ExhibitionsPage() {
         />
 
         <DataTable<Exhibition>
+          caption="جدول المعارض"
           rows={rows}
           columns={columns}
           rowKey={(e) => e.id}
@@ -488,6 +496,10 @@ export default function ExhibitionsPage() {
         }
         confirmLabel={target?.isContracted ? 'أوقف التعاقد' : 'امنح التعاقد'}
         tone={target?.isContracted ? 'crit' : 'accent'}
+        // منح التعاقد بيفتح مسار مالي حقيقي — نفس مستوى تشدد الترقية
+        // وتعليم المزاد المتعثر (FND-020)، ونفس السلوك المطبّق فعلًا في
+        // exhibitions/[id]/page.tsx — كان ناقص هنا في شاشة القائمة
+        typeToConfirm={target?.isContracted ? undefined : 'تعاقد'}
         requireReason
         reasonLabel="سبب القرار"
         reasonHint="بيتسجّل في سجل التدقيق (exhibition.contract_changed) ومابيتمسحش"

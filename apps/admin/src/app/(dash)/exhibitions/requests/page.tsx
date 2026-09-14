@@ -43,6 +43,7 @@ import {
 } from '@carq/ui';
 import {
   errorMessage,
+  nowMs,
   useApplication,
   useApplications,
   useRevealPhone,
@@ -131,6 +132,9 @@ export default function ExhibitionRequestsPage() {
   const [openedDoc, setOpenedDoc] = useState<DocumentKind | null>(null);
   const [fields, setFields] = useState<string[]>([]);
   const [ownerPhone, setOwnerPhone] = useState<string | null>(null);
+  /** FND-036 — ثابتة على ساعة الموك المجمّدة عشان حساب SLA ما يتأثرش
+   * بمرور وقت التشغيل الفعلي. */
+  const now = new Date(nowMs());
 
   /** الصفحات بالـcursor — مكدّس عشان «السابق» يشتغل، وبيتصفّر مع تغيير التبويب */
   const [cursor, setCursor] = useState<string | null>(null);
@@ -268,12 +272,12 @@ export default function ExhibitionRequestsPage() {
           {a.status === 'submitted' ? (
             <p
               className={
-                hoursSince(a.createdAt) > 72
+                hoursSince(a.createdAt, now) > 72
                   ? 'mt-0.5 text-caption font-bold text-crit'
                   : 'mt-0.5 text-caption text-content-faint'
               }
             >
-              مستني من {waitingFor(a.createdAt)}
+              مستني من {waitingFor(a.createdAt, now)}
             </p>
           ) : null}
         </div>
@@ -350,6 +354,7 @@ export default function ExhibitionRequestsPage() {
         />
 
         <DataTable<ExhibitionApplication>
+          caption="جدول طلبات ترقية المعارض"
           rows={current.data?.items ?? []}
           columns={columns}
           rowKey={(a) => a.id}
@@ -366,7 +371,7 @@ export default function ExhibitionRequestsPage() {
           }
           onRowClick={openReview}
           rowTone={(a) =>
-            a.status === 'submitted' && hoursSince(a.createdAt) > 72 ? 'warn' : undefined
+            a.status === 'submitted' && hoursSince(a.createdAt, now) > 72 ? 'warn' : undefined
           }
           searchable
           searchPlaceholder="دوّر باسم المعرض أو المالك…"

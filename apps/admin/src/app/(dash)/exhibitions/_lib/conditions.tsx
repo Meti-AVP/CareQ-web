@@ -2,51 +2,28 @@
 
 import { Check, Minus, X } from 'lucide-react';
 import { cn } from '@carq/ui';
-import type { ErrorCode } from '@carq/api-client';
+import {
+  bidBlockCode,
+  BID_BLOCK_LABEL_AR as BLOCK_LABEL,
+  BID_BLOCK_HINT_AR as BLOCK_HINT,
+  type BidConditions,
+} from '@carq/api-client';
 
 /**
  * ════════════════════════════════════════════════════════════════
- * الشروط الثلاثة للمزايدة — ADMIN_DASHBOARD_SPEC §4.4 (A-1)
+ * عرض الشروط الثلاثة للمزايدة — ADMIN_DASHBOARD_SPEC §4.4 (A-1)
  *
- * السيرفر بيتحقق منهم واحد ورا التاني في
+ * المنطق نفسه (`bidBlockCode`, `BidConditions`) مركزي في
+ * `@carq/api-client` (`permissions.ts`، المرحلة ٣) — مستخدم كمان في
+ * بوابة المعارض لحساب أهلية المزايدة. الملف ده UI العرض بس: السيرفر
+ * بيتحقق منهم واحد ورا التاني في
  * `services/auctions.py::_authorize_bidder`، وكل شرط بيفشل **بكود
- * مختلف**. عشان كده بنعرضهم ٣ علامات منفصلة — مش حالة واحدة:
- * الأدمن لازم يعرف أنهي شرط بالظبط اللي واقف قدام المعرض.
+ * مختلف**. عشان كده بنعرضهم ٣ علامات منفصلة — مش حالة واحدة: الأدمن
+ * لازم يعرف أنهي شرط بالظبط اللي واقف قدام المعرض.
  * ════════════════════════════════════════════════════════════════
  */
-export interface BidConditions {
-  /** users.role == 'exhibition' — null يعني بيانات المستخدمين لسه بتحمّل */
-  role: boolean | null;
-  /** exhibitions.is_contracted — المفتاح اللي الأدمن بيقلبه */
-  contracted: boolean;
-  /** auction_entries.paid_at — null يعني مش مسجّل في أي مزاد شغال */
-  entryPaid: boolean | null;
-}
-
-/** أول شرط ناقص هو اللي بيحدد الكود اللي المعرض هيشوفه لو حاول يزايد */
-export function bidBlockCode(c: BidConditions): ErrorCode | null {
-  if (c.role === false) return 'NOT_AN_EXHIBITION';
-  if (!c.contracted) return 'NOT_CONTRACTED';
-  if (c.entryPaid !== true) return 'ENTRY_NOT_PAID';
-  return null;
-}
-
-/**
- * الرسالة بالعربي زي ما المعرض هيشوفها — مش كود خام.
- * الكود التقني موجود في tooltip للمطورين بس (قرار مالك المنتج:
- * ممنوع أكواد إنجليزي خام في أي واجهة).
- */
-const BLOCK_LABEL: Record<string, string> = {
-  NOT_AN_EXHIBITION: 'حسابك مش حساب معرض',
-  NOT_CONTRACTED: 'معرضك مش متعاقد',
-  ENTRY_NOT_PAID: 'رسوم دخول المزاد مش مدفوعة',
-};
-
-const BLOCK_HINT: Record<string, string> = {
-  NOT_AN_EXHIBITION: 'دور المستخدم لسه مش «معرض»',
-  NOT_CONTRACTED: 'المفتاح مقفول — التعاقد هو اللي بيفتح المزايدة',
-  ENTRY_NOT_PAID: 'مدفعش رسوم دخول مزاد شغال',
-};
+export type { BidConditions };
+export { bidBlockCode };
 
 function Mark({ state, label }: { state: boolean | null; label: string }) {
   const tone =

@@ -358,6 +358,7 @@ export default function MyAuctionsPage() {
         ) : null}
 
         <DataTable
+          caption="جدول مزايداتي"
           rows={rows}
           columns={columns}
           rowKey={(a) => a.id}

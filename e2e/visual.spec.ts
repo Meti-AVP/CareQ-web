@@ -12,7 +12,7 @@ import { ADMIN, DEALERS, open } from './helpers';
  */
 
 const SHOTS: Array<[string, string, string]> = [
-  // [التطبيق, المسار, اسم الصورة]
+  // [التطبيق, المسار, اسم الصورة] — كلها محتاجة جلسة (جاهزة من global-setup.ts)
   [ADMIN, '/', 'admin-overview'],
   [ADMIN, '/listings', 'admin-listings'],
   [ADMIN, '/users', 'admin-users'],
@@ -23,7 +23,6 @@ const SHOTS: Array<[string, string, string]> = [
   [ADMIN, '/financing', 'admin-financing'],
   [ADMIN, '/audit', 'admin-audit'],
   [ADMIN, '/health', 'admin-health'],
-  [ADMIN, '/login', 'admin-login'],
   [DEALERS, '/', 'dealers-home'],
   [DEALERS, '/inventory', 'dealers-inventory'],
   [DEALERS, '/inventory/new', 'dealers-new-listing'],
@@ -36,17 +35,35 @@ const SHOTS: Array<[string, string, string]> = [
   [DEALERS, '/profile', 'dealers-profile'],
   [DEALERS, '/apply', 'dealers-apply'],
   [DEALERS, '/apply/status', 'dealers-apply-status'],
+];
+
+/** شاشات الدخول — لازم تتصوّر من غير جلسة، غير كده هي محوّلة لـ/ (المرحلة ٢) */
+const LOGIN_SHOTS: Array<[string, string, string]> = [
+  [ADMIN, '/login', 'admin-login'],
   [DEALERS, '/login', 'dealers-login'],
 ];
 
-for (const [base, path, name] of SHOTS) {
-  test(`سكرينشوت: ${name}`, async ({ page }, testInfo) => {
-    await open(page, base + path);
-    // الحركات الافتتاحية بتخلص في أقل من ثانيتين — بنستنى عشان صورة مستقرة
-    await page.waitForTimeout(2200);
-    await page.screenshot({
-      path: `e2e/screenshots/${testInfo.project.name}/${name}.png`,
-      fullPage: true,
-    });
+async function shoot(page: Parameters<typeof open>[0], base: string, path: string, name: string, project: string) {
+  await open(page, base + path);
+  // الحركات الافتتاحية بتخلص في أقل من ثانيتين — بنستنى عشان صورة مستقرة
+  await page.waitForTimeout(2200);
+  await page.screenshot({
+    path: `e2e/screenshots/${project}/${name}.png`,
+    fullPage: true,
   });
 }
+
+for (const [base, path, name] of SHOTS) {
+  test(`سكرينشوت: ${name}`, async ({ page }, testInfo) => {
+    await shoot(page, base, path, name, testInfo.project.name);
+  });
+}
+
+test.describe('سكرينشوت شاشات الدخول (من غير جلسة)', () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+  for (const [base, path, name] of LOGIN_SHOTS) {
+    test(`سكرينشوت: ${name}`, async ({ page }, testInfo) => {
+      await shoot(page, base, path, name, testInfo.project.name);
+    });
+  }
+});

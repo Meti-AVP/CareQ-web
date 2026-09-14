@@ -30,6 +30,8 @@ import {
   formatEGP,
   useToast,
   withThousands,
+  validateFile,
+  ACCEPTED_IMAGE_TYPES,
 } from '@carq/ui';
 import {
   errorMessage,
@@ -144,11 +146,24 @@ function NewListingForm({ catalog }: { catalog: Catalog }) {
 
   const [form, setForm] = useState<FormState>(() => initialForm(catalog));
   const [touched, setTouched] = useState(false);
-  const [photos, setPhotos] = useState<string[]>([]);
+  const [photos, setPhotos] = useState<File[]>([]);
   const [createdId, setCreatedId] = useState<string | null>(null);
   const [activated, setActivated] = useState(false);
 
   const set = (patch: Partial<FormState>) => setForm((f) => ({ ...f, ...patch }));
+
+  const pickPhoto = (file: File, opts?: { replaceFirst?: boolean }) => {
+    const error = validateFile(file, { acceptedTypes: ACCEPTED_IMAGE_TYPES });
+    if (error) {
+      toast({ tone: 'crit', title: 'الصورة مرفوضة', body: error });
+      return;
+    }
+    setPhotos((p) => {
+      if (opts?.replaceFirst) return [file, ...p.slice(1)];
+      if (p.some((x) => x.name === file.name && x.size === file.size)) return p;
+      return [...p, file];
+    });
+  };
 
   const priceNum = toNumber(form.price);
   const yearNum = toNumber(form.year);
@@ -203,22 +218,26 @@ function NewListingForm({ catalog }: { catalog: Catalog }) {
     );
   };
 
-  const onUploadFirst = () => {
-    if (!createdId) return;
-    uploadPhoto.mutate(
-      { id: createdId },
-      {
-        onSuccess: () => {
-          setActivated(true);
-          toast({
-            tone: 'ok',
-            title: 'الإعلان بقى نشط',
-            body: 'العربية ظهرت في السوق وفي صفحة المعرض.',
-          });
-        },
-        onError: (e) => toast({ tone: 'crit', title: 'الرفع مانفعش', body: errorMessage(e) }),
-      },
-    );
+  /** بيرفع كل الصور المختارة بالتوالي — الأولى هي اللي بتفعّل الإعلان (D-2) */
+  const onUploadPhotos = async () => {
+    if (!createdId || photos.length === 0) return;
+    let anyActivated = false;
+    for (const file of photos) {
+      try {
+        const res = await uploadPhoto.mutateAsync({ id: createdId, file });
+        if (res.activated) anyActivated = true;
+      } catch (e) {
+        toast({ tone: 'crit', title: 'رفع صورة فشل', body: errorMessage(e) });
+      }
+    }
+    if (anyActivated) {
+      setActivated(true);
+      toast({
+        tone: 'ok',
+        title: 'الإعلان بقى نشط',
+        body: 'العربية ظهرت في السوق وفي صفحة المعرض.',
+      });
+    }
   };
 
   /* ───────── بعد الحفظ: الإعلان مسودة لحد ما الصورة ترفع ───────── */
@@ -260,8 +279,8 @@ function NewListingForm({ catalog }: { catalog: Catalog }) {
                   label="اختار أول صورة للعربية"
                   hint="الصورة الأولى هي اللي بتظهر في نتايج البحث"
                   accept="image/*"
-                  fileName={photos[0] ?? null}
-                  onPick={(f) => setPhotos((p) => [f.name, ...p.slice(1)])}
+                  fileName={photos[0]?.name ?? null}
+                  onPick={(f) => pickPhoto(f, { replaceFirst: true })}
                   icon={<ImagePlus />}
                 />
                 <Button
@@ -270,9 +289,11 @@ function NewListingForm({ catalog }: { catalog: Catalog }) {
                   icon={<ImagePlus />}
                   disabled={photos.length === 0}
                   loading={uploadPhoto.isPending}
-                  onClick={onUploadFirst}
+                  onClick={onUploadPhotos}
                 >
-                  ارفع الصورة وفعّل الإعلان
+                  {photos.length > 1
+                    ? `ارفع ${photos.length} صور وفعّل الإعلان`
+                    : 'ارفع الصورة وفعّل الإعلان'}
                 </Button>
               </div>
             ) : null}
@@ -498,21 +519,21 @@ function NewListingForm({ catalog }: { catalog: Catalog }) {
               hint="JPG أو PNG — رتّب الصور بحيث تكون الواجهة أول واحدة"
               accept="image/*"
               fileName={null}
-              onPick={(f) => setPhotos((p) => (p.includes(f.name) ? p : [...p, f.name]))}
+              onPick={(f) => pickPhoto(f)}
               icon={<ImagePlus />}
             />
 
             {photos.length > 0 ? (
               <ul className="mt-4 flex flex-wrap gap-2">
-                {photos.map((name, i) => (
-                  <li key={name}>
+                {photos.map((file, i) => (
+                  <li key={`${file.name}-${file.size}`}>
                     <span className="inline-flex items-center gap-2 rounded-full bg-surface-alt px-3 py-1.5 text-caption text-content">
                       {i === 0 ? <Badge tone="accent">الواجهة</Badge> : null}
-                      <span className="max-w-[180px] truncate">{name}</span>
+                      <span className="max-w-[180px] truncate">{file.name}</span>
                       <button
                         type="button"
-                        aria-label={`شيل ${name}`}
-                        onClick={() => setPhotos((p) => p.filter((x) => x !== name))}
+                        aria-label={`شيل ${file.name}`}
+                        onClick={() => setPhotos((p) => p.filter((x) => x !== file))}
                         className="text-content-faint transition-colors hover:text-crit"
                       >
                         <X className="h-3.5 w-3.5" />

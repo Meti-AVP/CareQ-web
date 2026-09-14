@@ -12,8 +12,15 @@
  *   · لوحة الصحة       : ٣٠ ثانية
  *   · الإحصائيات       : ٥ دقايق
  *   · `refetchOnWindowFocus` في كل مكان
+ *
+ * **لوحة الأدمن بتفضل polling بالكامل — متتحولش لـWS** (`ADMIN §9`
+ * بالحرف: «مفيش موضوع admin:* دلوقتي... متحوّلش لوحة الأدمن لـWS»).
+ * كل `refetchInterval` هنا `visibleRefetchInterval()` (المرحلة ٦،
+ * `docs/REALTIME.md`) — بيوقف تلقائيًا لما التاب مش ظاهر، عشان تاب
+ * مقفول مفتوح على شاشة فيها ٥+ queries ميعملش بولينج مجاني للأبد.
  * ════════════════════════════════════════════════════════════════
  */
+import { useRef } from 'react';
 import {
   useMutation,
   useQuery,
@@ -21,7 +28,10 @@ import {
   type UseQueryOptions,
 } from '@tanstack/react-query';
 import * as mock from '../mock/db';
-import { http, USE_MOCK, idempotencyKey } from '../client';
+import { http, USE_MOCK, IdempotencyKeyCache, visibleRefetchInterval } from '../client';
+import { ApiError } from '../errors';
+import { useSession } from '../session-context';
+import { can, type AdminAction } from '../permissions';
 import type {
   AdminActivityCell,
   Auction,
@@ -58,6 +68,11 @@ async function m<T>(fn: () => T, ms = 120): Promise<T> {
   return fn();
 }
 
+/** نسخة واحدة من `IdempotencyKeyCache` تفضل ثابتة عبر إعادة الرندر (X-3) */
+function useStableIdempotencyKey(prefix: string): IdempotencyKeyCache {
+  return useRef(new IdempotencyKeyCache(prefix)).current;
+}
+
 const qs = (params: Record<string, unknown>) => {
   const sp = new URLSearchParams();
   Object.entries(params).forEach(([k, v]) => {
@@ -68,6 +83,19 @@ const qs = (params: Record<string, unknown>) => {
 };
 
 type Opts<T> = Omit<UseQueryOptions<T>, 'queryKey' | 'queryFn'>;
+
+/**
+ * حارس دفاعي على مستوى الـmutation نفسه (المرحلة ٣ — `docs/PERMISSIONS.md`).
+ * **دفاع إضافي مش الحد الأمني** — الوصول للوحة كلها أصلًا محصور بـ
+ * `role==='admin'` من `middleware.ts`/`layout.tsx`، والفرض الحقيقي
+ * لازم يكون سيرفر-سايد. بترمي بنفس شكل `ApiError` العادي عشان أي
+ * صفحة تتعامل معاه زي أي خطأ سيرفر تاني (`errorMessage`/`errorCode`).
+ */
+function requireCan(user: Pick<User, 'role'> | null, action: AdminAction) {
+  if (!can(user, action)) {
+    throw new ApiError('FORBIDDEN', 'مفيش صلاحية كافية للإجراء ده', null, 403);
+  }
+}
 
 /* ═══════════════════════ الإحصائيات ═══════════════════════ */
 
@@ -82,7 +110,7 @@ export function useOverview(filters: StatsFilters = {}, opts?: Opts<OverviewStat
       USE_MOCK
         ? m(() => mock.getOverview(filters))
         : http<OverviewStats>(`/v1/admin/stats/overview${qs({ ...filters })}`),
-    refetchInterval: POLL.stats,
+    refetchInterval: visibleRefetchInterval(POLL.stats),
     refetchOnWindowFocus: true,
     ...opts,
   });
@@ -97,7 +125,7 @@ export function useTimeseries(metric: TimeseriesMetric, days = 30, filters: Stat
         : http<{ points: TimeseriesPoint[] }>(
             `/v1/admin/stats/timeseries${qs({ metric, days, ...filters })}`,
           ).then((r) => r.points),
-    refetchInterval: POLL.stats,
+    refetchInterval: visibleRefetchInterval(POLL.stats),
     refetchOnWindowFocus: true,
   });
 }
@@ -111,7 +139,7 @@ export function useBreakdown(dimension: BreakdownDimension, filters: StatsFilter
         : http<{ buckets: BreakdownBucket[] }>(
             `/v1/admin/stats/breakdown${qs({ dimension, ...filters })}`,
           ).then((r) => r.buckets),
-    refetchInterval: POLL.stats,
+    refetchInterval: visibleRefetchInterval(POLL.stats),
   });
 }
 
@@ -124,7 +152,7 @@ export function useFunnel(name: 'publish' | 'sell_now' | 'financing', filters: S
         : http<{ steps: Array<{ key: string; label: string; count: number }> }>(
             `/v1/admin/stats/funnel${qs({ name, ...filters })}`,
           ),
-    refetchInterval: POLL.stats,
+    refetchInterval: visibleRefetchInterval(POLL.stats),
   });
 }
 
@@ -138,7 +166,7 @@ export function useAdminActivity() {
         : http<{ cells: AdminActivityCell[] }>('/v1/admin/stats/admin-activity').then(
             (r) => r.cells,
           ),
-    refetchInterval: POLL.stats,
+    refetchInterval: visibleRefetchInterval(POLL.stats),
   });
 }
 
@@ -152,7 +180,7 @@ export function useSellNowQueue(status = 'pending', cursor: string | null = null
         ? m(() => mock.querySellNow({ status, cursor }))
         : http<Page<SellNowRequest>>(`/v1/admin/sell-now/requests${qs({ status, cursor })}`),
     // الطابور ده فيه ناس مستنية فلوس — بيتحدّث كل ٢٠ ثانية
-    refetchInterval: POLL.queue,
+    refetchInterval: visibleRefetchInterval(POLL.queue),
     refetchOnWindowFocus: true,
   });
 }
@@ -177,13 +205,16 @@ export function usePendingCount() {
         : http<Page<SellNowRequest>>('/v1/admin/sell-now/requests?status=pending').then(
             (p) => p.total ?? p.items.length,
           ),
-    refetchInterval: POLL.queue,
+    refetchInterval: visibleRefetchInterval(POLL.queue),
     refetchOnWindowFocus: true,
   });
 }
 
 export function useOfferSellNow() {
   const qc = useQueryClient();
+  // عرض بسعر مختلف عن نفس الطلب = عملية جديدة (تصحيح سعر)؛ إعادة محاولة
+  // بنفس السعر = نفس المفتاح
+  const keys = useStableIdempotencyKey('offer');
   return useMutation({
     mutationFn: ({ id, price, note }: { id: string; price: number; note?: string }) =>
       USE_MOCK
@@ -191,22 +222,32 @@ export function useOfferSellNow() {
         : http<SellNowRequest>(`/v1/admin/sell-now/requests/${id}/offer`, {
             method: 'POST',
             body: { price },
-            idempotency: idempotencyKey(`offer-${id}`),
+            idempotency: keys.get(`${id}:${price}`),
           }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'sell-now'] }),
+    onSuccess: (_d, vars) => {
+      keys.clear(`${vars.id}:${vars.price}`);
+      qc.invalidateQueries({ queryKey: ['admin', 'sell-now'] });
+      qc.invalidateQueries({ queryKey: ['admin', 'audit'] });
+    },
   });
 }
 
 export function useCollectSellNow() {
   const qc = useQueryClient();
+  const keys = useStableIdempotencyKey('collect');
   return useMutation({
     mutationFn: ({ id }: { id: string }) =>
       USE_MOCK
         ? m(() => mock.collectSellNow(id), 500)
-        : http<SellNowRequest>(`/v1/admin/sell-now/requests/${id}/collected`, { method: 'POST' }),
-    onSuccess: () => {
+        : http<SellNowRequest>(`/v1/admin/sell-now/requests/${id}/collected`, {
+            method: 'POST',
+            idempotency: keys.get(id),
+          }),
+    onSuccess: (_d, vars) => {
+      keys.clear(vars.id);
       qc.invalidateQueries({ queryKey: ['admin', 'sell-now'] });
       qc.invalidateQueries({ queryKey: ['admin', 'listings'] });
+      qc.invalidateQueries({ queryKey: ['admin', 'audit'] });
     },
   });
 }
@@ -236,6 +277,8 @@ export function useListing(id: string) {
 /** شارات الثقة — المسار الوحيد لمنحها (T-1, T-2) */
 export function useSetListingFlags() {
   const qc = useQueryClient();
+  const { user } = useSession();
+  const keys = useStableIdempotencyKey('flags');
   return useMutation({
     mutationFn: ({
       id,
@@ -245,8 +288,9 @@ export function useSetListingFlags() {
       id: string;
       flags: { kmVerified?: boolean; inspected?: boolean };
       reason: string;
-    }): Promise<{ kmVerified: boolean; inspected: boolean }> =>
-      USE_MOCK
+    }): Promise<{ kmVerified: boolean; inspected: boolean }> => {
+      requireCan(user, 'listing.flags.set');
+      return USE_MOCK
         ? m(() => {
             const l = mock.setListingFlags(id, flags, reason);
             return { kmVerified: l.kmVerified, inspected: l.inspected };
@@ -254,8 +298,11 @@ export function useSetListingFlags() {
         : http<{ km_verified: boolean; inspected: boolean }>(`/v1/admin/listings/${id}/flags`, {
             method: 'PATCH',
             body: { km_verified: flags.kmVerified, inspected: flags.inspected, reason },
-          }).then((r) => ({ kmVerified: r.km_verified, inspected: r.inspected })),
-    onSuccess: () => {
+            idempotency: keys.get(`${id}:${flags.kmVerified}:${flags.inspected}`),
+          }).then((r) => ({ kmVerified: r.km_verified, inspected: r.inspected }));
+    },
+    onSuccess: (_d, vars) => {
+      keys.clear(`${vars.id}:${vars.flags.kmVerified}:${vars.flags.inspected}`);
       qc.invalidateQueries({ queryKey: ['admin', 'listings'] });
       qc.invalidateQueries({ queryKey: ['admin', 'audit'] });
     },
@@ -264,6 +311,7 @@ export function useSetListingFlags() {
 
 export function useSetListingStatus() {
   const qc = useQueryClient();
+  const keys = useStableIdempotencyKey('listing-status');
   return useMutation({
     mutationFn: ({ id, status, reason }: { id: string; status: ListingStatus; reason: string }) =>
       USE_MOCK
@@ -271,8 +319,10 @@ export function useSetListingStatus() {
         : http<Listing>(`/v1/admin/listings/${id}/status`, {
             method: 'PATCH',
             body: { status, reason },
+            idempotency: keys.get(`${id}:${status}`),
           }),
-    onSuccess: () => {
+    onSuccess: (_d, vars) => {
+      keys.clear(`${vars.id}:${vars.status}`);
       qc.invalidateQueries({ queryKey: ['admin', 'listings'] });
       qc.invalidateQueries({ queryKey: ['admin', 'audit'] });
     },
@@ -306,6 +356,8 @@ export function useExhibition(id: string) {
 /** المفتاح اللي بيحيي المزاد (A-1) — تأكيد مزدوج + سبب إجباري */
 export function useSetContract() {
   const qc = useQueryClient();
+  const { user } = useSession();
+  const keys = useStableIdempotencyKey('contract');
   return useMutation({
     mutationFn: ({
       id,
@@ -315,14 +367,18 @@ export function useSetContract() {
       id: string;
       isContracted: boolean;
       reason: string;
-    }): Promise<{ isContracted: boolean }> =>
-      USE_MOCK
+    }): Promise<{ isContracted: boolean }> => {
+      requireCan(user, 'exhibition.contract.set');
+      return USE_MOCK
         ? m(() => ({ isContracted: mock.setContract(id, isContracted, reason).isContracted }), 500)
         : http<{ is_contracted: boolean }>(`/v1/admin/exhibitions/${id}/contract`, {
             method: 'PATCH',
             body: { is_contracted: isContracted, reason },
-          }).then((r) => ({ isContracted: r.is_contracted })),
-    onSuccess: () => {
+            idempotency: keys.get(`${id}:${isContracted}`),
+          }).then((r) => ({ isContracted: r.is_contracted }));
+    },
+    onSuccess: (_d, vars) => {
+      keys.clear(`${vars.id}:${vars.isContracted}`);
       qc.invalidateQueries({ queryKey: ['admin', 'exhibitions'] });
       qc.invalidateQueries({ queryKey: ['admin', 'audit'] });
     },
@@ -358,7 +414,7 @@ export function useApplications(status = 'submitted', cursor: string | null = nu
         : http<Page<ExhibitionApplication>>(
             `/v1/admin/exhibitions/applications${qs({ status, cursor })}`,
           ),
-    refetchInterval: POLL.queue,
+    refetchInterval: visibleRefetchInterval(POLL.queue),
   });
 }
 
@@ -375,6 +431,8 @@ export function useApplication(id: string) {
 
 export function useReviewApplication() {
   const qc = useQueryClient();
+  const { user } = useSession();
+  const keys = useStableIdempotencyKey('review');
   return useMutation({
     mutationFn: ({
       id,
@@ -387,6 +445,7 @@ export function useReviewApplication() {
       reason: string;
       fields?: string[];
     }): Promise<void> => {
+      requireCan(user, 'exhibition.application.review');
       if (USE_MOCK) {
         return m(() => {
           if (action === 'approve') mock.approveApplication(id, reason);
@@ -397,9 +456,11 @@ export function useReviewApplication() {
       return http<void>(`/v1/admin/exhibitions/applications/${id}/${action}`, {
         method: 'POST',
         body: { reason, fields },
+        idempotency: keys.get(`${id}:${action}`),
       });
     },
-    onSuccess: () => {
+    onSuccess: (_d, vars) => {
+      keys.clear(`${vars.id}:${vars.action}`);
       qc.invalidateQueries({ queryKey: ['admin', 'applications'] });
       qc.invalidateQueries({ queryKey: ['admin', 'exhibitions'] });
       qc.invalidateQueries({ queryKey: ['admin', 'audit'] });
@@ -418,7 +479,7 @@ export function useAuctions(status = 'all', cursor: string | null = null) {
         : http<Page<Auction>>(`/v1/admin/auctions${qs({ status, cursor })}`),
     // حالة المزاد ماينفعش تتكاش (§10.7)
     staleTime: 0,
-    refetchInterval: POLL.queue,
+    refetchInterval: visibleRefetchInterval(POLL.queue),
   });
 }
 
@@ -453,12 +514,25 @@ export function useAuctionEntries(auctionId?: string) {
 
 export function useMarkEntryPaid() {
   const qc = useQueryClient();
+  const { user } = useSession();
+  const keys = useStableIdempotencyKey('entry-paid');
   return useMutation({
-    mutationFn: ({ entryId, reason }: { entryId: string; reason: string }) =>
-      USE_MOCK
+    mutationFn: ({ entryId, reason }: { entryId: string; reason: string }) => {
+      requireCan(user, 'auction.entry.mark_paid');
+      return USE_MOCK
         ? m(() => mock.markEntryPaid(entryId, reason), 400)
-        : http<AuctionEntry>(`/v1/admin/auction-entries/${entryId}/paid`, { method: 'POST' }),
-    onSuccess: () => {
+        : // كان `reason` بيتفقد هنا (باج FND-018) — الـtype كان بيطلبه
+          // والموك كان بيستخدمه، بس نداء الـhttp الحقيقي ماكانش بيبعته
+          // خالص، يعني السبب المكتوب (بند ٦ في المرحلة ٣) مش هيوصل
+          // للسيرفر الحقيقي.
+          http<AuctionEntry>(`/v1/admin/auction-entries/${entryId}/paid`, {
+            method: 'POST',
+            body: { reason },
+            idempotency: keys.get(entryId),
+          });
+    },
+    onSuccess: (_d, vars) => {
+      keys.clear(vars.entryId);
       qc.invalidateQueries({ queryKey: ['admin', 'entries'] });
       qc.invalidateQueries({ queryKey: ['admin', 'audit'] });
     },
@@ -468,12 +542,21 @@ export function useMarkEntryPaid() {
 /** بيشتغل بس على مزاد settled — اقفل الزرار في الحالات التانية (A-11) */
 export function useMarkDefaulted() {
   const qc = useQueryClient();
+  const { user } = useSession();
+  const keys = useStableIdempotencyKey('defaulted');
   return useMutation({
-    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
-      USE_MOCK
+    mutationFn: ({ id, reason }: { id: string; reason: string }) => {
+      requireCan(user, 'auction.mark_defaulted');
+      return USE_MOCK
         ? m(() => mock.markAuctionDefaulted(id, reason), 500)
-        : http<Auction>(`/v1/admin/auctions/${id}/default`, { method: 'POST' }),
-    onSuccess: () => {
+        : http<Auction>(`/v1/admin/auctions/${id}/default`, {
+            method: 'POST',
+            body: { reason },
+            idempotency: keys.get(id),
+          });
+    },
+    onSuccess: (_d, vars) => {
+      keys.clear(vars.id);
       qc.invalidateQueries({ queryKey: ['admin', 'auctions'] });
       qc.invalidateQueries({ queryKey: ['admin', 'audit'] });
     },
@@ -491,7 +574,7 @@ export function useFinancingApps(status = 'submitted', cursor: string | null = n
         : http<Page<FinancingApplication>>(
             `/v1/admin/financing/applications${qs({ status, cursor })}`,
           ),
-    refetchInterval: POLL.queue,
+    refetchInterval: visibleRefetchInterval(POLL.queue),
   });
 }
 
@@ -508,6 +591,7 @@ export function useFinancingApp(id: string) {
 
 export function useSetFinancingStatus() {
   const qc = useQueryClient();
+  const keys = useStableIdempotencyKey('financing-status');
   return useMutation({
     mutationFn: ({ id, status, reason }: { id: string; status: FinancingStatus; reason: string }) =>
       USE_MOCK
@@ -515,14 +599,23 @@ export function useSetFinancingStatus() {
         : http<FinancingApplication>(`/v1/admin/financing/applications/${id}`, {
             method: 'PATCH',
             body: { status, reason },
+            idempotency: keys.get(`${id}:${status}`),
           }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'financing'] }),
+    onSuccess: (_d, vars) => {
+      keys.clear(`${vars.id}:${vars.status}`);
+      qc.invalidateQueries({ queryKey: ['admin', 'financing'] });
+      qc.invalidateQueries({ queryKey: ['admin', 'audit'] });
+    },
   });
 }
 
 /**
  * رابط موقّع لصورة البطاقة — ٥ دقايق، وكل فتحة متسجّلة (F-6 · §10.1).
- * ممنوع كاش: `gcTime: 0` عشان الرابط مايتخزنش بعد ما ينتهي.
+ * دي `useMutation` مش `useQuery` — مفيش `queryKey` تتخزّن تحته النتيجة
+ * أصلًا، فمفيش `gcTime` تتحط هنا (الخيار ده لـ`useQuery` بس). الحماية
+ * الفعلية من الكاش في الصفحة اللي بتستهلك الرابط
+ * (`financing/[id]/page.tsx`): الرابط عايش في `state` مؤقت بس وبيتمسح
+ * صراحة لما العداد ينتهي أو الديالوج يتقفل.
  */
 export function useSignedIdImage() {
   const qc = useQueryClient();
@@ -555,12 +648,21 @@ export function useUsers(
 
 export function useSetUserRole() {
   const qc = useQueryClient();
+  const { user } = useSession();
+  const keys = useStableIdempotencyKey('user-role');
   return useMutation({
-    mutationFn: ({ id, role, reason }: { id: string; role: UserRole; reason: string }) =>
-      USE_MOCK
+    mutationFn: ({ id, role, reason }: { id: string; role: UserRole; reason: string }) => {
+      requireCan(user, 'user.role.set');
+      return USE_MOCK
         ? m(() => mock.setUserRole(id, role, reason), 500)
-        : http<User>(`/v1/admin/users/${id}/role`, { method: 'PATCH', body: { role, reason } }),
-    onSuccess: () => {
+        : http<User>(`/v1/admin/users/${id}/role`, {
+            method: 'PATCH',
+            body: { role, reason },
+            idempotency: keys.get(`${id}:${role}`),
+          });
+    },
+    onSuccess: (_d, vars) => {
+      keys.clear(`${vars.id}:${vars.role}`);
       qc.invalidateQueries({ queryKey: ['admin', 'users'] });
       qc.invalidateQueries({ queryKey: ['admin', 'audit'] });
     },
@@ -569,12 +671,21 @@ export function useSetUserRole() {
 
 export function useSetUserStatus() {
   const qc = useQueryClient();
+  const { user } = useSession();
+  const keys = useStableIdempotencyKey('user-status');
   return useMutation({
-    mutationFn: ({ id, status, reason }: { id: string; status: UserStatus; reason: string }) =>
-      USE_MOCK
+    mutationFn: ({ id, status, reason }: { id: string; status: UserStatus; reason: string }) => {
+      requireCan(user, 'user.status.set');
+      return USE_MOCK
         ? m(() => mock.setUserStatus(id, status, reason), 500)
-        : http<User>(`/v1/admin/users/${id}/status`, { method: 'PATCH', body: { status, reason } }),
-    onSuccess: () => {
+        : http<User>(`/v1/admin/users/${id}/status`, {
+            method: 'PATCH',
+            body: { status, reason },
+            idempotency: keys.get(`${id}:${status}`),
+          });
+    },
+    onSuccess: (_d, vars) => {
+      keys.clear(`${vars.id}:${vars.status}`);
       qc.invalidateQueries({ queryKey: ['admin', 'users'] });
       qc.invalidateQueries({ queryKey: ['admin', 'audit'] });
     },
@@ -583,13 +694,20 @@ export function useSetUserStatus() {
 
 /** كشف رقم مخفي — أكشن واعٍ ومتسجّل (§10.2) */
 export function useRevealPhone() {
+  const qc = useQueryClient();
+  const keys = useStableIdempotencyKey('reveal-phone');
   return useMutation({
     mutationFn: ({ userId }: { userId: string }) =>
       USE_MOCK
         ? m(() => mock.revealPhone(userId), 200)
-        : http<{ phone: string }>(`/v1/admin/users/${userId}/phone`, { method: 'POST' }).then(
-            (r) => r.phone,
-          ),
+        : http<{ phone: string }>(`/v1/admin/users/${userId}/phone`, {
+            method: 'POST',
+            idempotency: keys.get(userId),
+          }).then((r) => r.phone),
+    onSuccess: (_d, vars) => {
+      keys.clear(vars.userId);
+      qc.invalidateQueries({ queryKey: ['admin', 'audit'] });
+    },
   });
 }
 
@@ -599,7 +717,7 @@ export function useHealth() {
   return useQuery<HealthSnapshot>({
     queryKey: ['admin', 'health'],
     queryFn: () => (USE_MOCK ? m(() => mock.getHealth(), 200) : http<HealthSnapshot>('/v1/admin/health')),
-    refetchInterval: POLL.health,
+    refetchInterval: visibleRefetchInterval(POLL.health),
     refetchOnWindowFocus: true,
   });
 }
@@ -611,7 +729,7 @@ export function useScanJobs(status = 'all', cursor: string | null = null) {
       USE_MOCK
         ? m(() => mock.queryScanJobs({ status, cursor }))
         : http<Page<ScanJob>>(`/v1/admin/scan-jobs${qs({ status, cursor })}`),
-    refetchInterval: POLL.health,
+    refetchInterval: visibleRefetchInterval(POLL.health),
   });
 }
 
@@ -622,6 +740,10 @@ export function useAudit(
     entityType?: string;
     entityId?: string;
     action?: string;
+    /** FND-037 — فلترة على السجل كله، مش الصفحة المعروضة بس */
+    actor?: string;
+    from?: string;
+    to?: string;
     cursor?: string | null;
   } = {},
 ) {

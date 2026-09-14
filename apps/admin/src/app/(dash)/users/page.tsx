@@ -35,6 +35,7 @@ import {
 } from '@carq/ui';
 import {
   errorMessage,
+  nowMs,
   useOverview,
   useRevealPhone,
   useSetUserRole,
@@ -91,6 +92,9 @@ export default function UsersPage() {
   const [cursor, setCursor] = useState<string | null>(null);
   const [seen, setSeen] = useState<Array<string | null>>([]);
   const [pending, setPending] = useState<Pending>(null);
+  /** FND-036 — ثابتة على ساعة الموك المجمّدة، مش الوقت الحقيقي، عشان
+   * «آخر ظهور» متتغيّرش بمرور وقت التشغيل الفعلي. */
+  const now = new Date(nowMs());
 
   const overview = useOverview();
   const users = useUsers({ role, status, cursor });
@@ -222,7 +226,9 @@ export default function UsersPage() {
       hideBelow: 'lg',
       value: (u) => u.lastSeenAt ?? '',
       render: (u) => (
-        <span className="text-content-sub">{u.lastSeenAt ? relTimeAr(u.lastSeenAt) : '—'}</span>
+        <span className="text-content-sub">
+          {u.lastSeenAt ? relTimeAr(u.lastSeenAt, now) : '—'}
+        </span>
       ),
     },
     {
@@ -315,6 +321,7 @@ export default function UsersPage() {
         />
 
         <DataTable
+          caption="جدول المستخدمين"
           rows={rows}
           columns={columns}
           rowKey={(u) => u.id}

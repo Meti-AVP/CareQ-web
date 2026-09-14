@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useId, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   AlertTriangle,
@@ -12,6 +12,9 @@ import {
   Copy,
   Download,
   FileSpreadsheet,
+  FolderOpen,
+  ImageOff,
+  Images,
   KeyRound,
   Loader2,
   Send,
@@ -31,9 +34,13 @@ import {
   Select,
   Sheet,
   Skeleton,
+  cn,
   useToast,
   formatEGP,
   withThousands,
+  validateFile,
+  validateFileCount,
+  ACCEPTED_IMAGE_TYPES,
   type Column,
 } from '@carq/ui';
 import {
@@ -41,6 +48,7 @@ import {
   useBulkCreate,
   useCatalog,
   useMyListings,
+  useUploadListingPhoto,
   type Catalog,
 } from '@carq/api-client';
 import {
@@ -91,6 +99,11 @@ type ColumnKey = (typeof COLUMNS)[number];
 /** L-12: فرق العداد اللي تحته الإعلان بيعتبر تكرار محتمل */
 const DUP_KM_WINDOW = 2_000;
 
+/** ملف CSV منطقي مايستحقش يكون أكبر من كذا — لو أكبر، غالبًا ملف غلط */
+const MAX_CSV_BYTES = 5 * 1024 * 1024;
+/** أقصى عدد صور دفعة واحدة (مجلد كامل) — تحقق الحجم/النوع لكل واحدة برضو */
+const MAX_PHOTOS_PER_UPLOAD = 200;
+
 type IssueLevel = 'error' | 'warn';
 interface Issue {
   level: IssueLevel;
@@ -119,6 +132,9 @@ type SendState = 'sending' | 'ok' | 'fail';
 interface RowResult {
   state: SendState;
   error?: string;
+  listingId?: string;
+  photosUploaded?: number;
+  photosTotal?: number;
 }
 
 /* ═══════════════════════ قراءة الـCSV ═══════════════════════ */
@@ -174,6 +190,71 @@ function toNumber(raw: string): number | null {
   if (!cleaned) return null;
   const n = Number(cleaned);
   return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * ربط الصور بالصفوف (§4.3 — «مجلد مضغوط أسماء ملفاته = رقم الصف»).
+ * بدل فك ضغط ZIP (يحتاج مكتبة جديدة)، بنستخدم اختيار مجلد كامل
+ * مباشرة من المتصفح (`webkitdirectory`) — نفس الفكرة: كل صورة اسمها
+ * بيبدأ برقم الصف (١-indexed)، زي `1.jpg` أو `3-front.png`.
+ */
+function matchRowIndexFromFileName(fileName: string): number | null {
+  const base = fileName.split('/').pop() ?? fileName;
+  const m = base.match(/^(\d+)/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) && n >= 1 ? n - 1 : null;
+}
+
+/** خلية «الصور» في جدول المعاينة — عداد + رفع/شيل لصف واحد */
+function RowPhotoCell({
+  count,
+  onAdd,
+  onClear,
+}: {
+  count: number;
+  onAdd: (files: File[]) => void;
+  onClear: () => void;
+}) {
+  const id = useId();
+  return (
+    <div className="flex items-center gap-1.5">
+      <label
+        htmlFor={id}
+        className={cn(
+          'flex h-8 cursor-pointer items-center gap-1.5 rounded-full px-2.5 text-caption font-bold transition-colors',
+          count > 0
+            ? 'bg-ok-soft text-ok'
+            : 'bg-muted-soft text-content-sub hover:bg-accent-soft/40',
+        )}
+      >
+        {count > 0 ? <Images className="h-3.5 w-3.5" /> : <ImageOff className="h-3.5 w-3.5" />}
+        <span className="tnum">{count > 0 ? `${count} صورة` : 'ولا صورة'}</span>
+        <input
+          id={id}
+          type="file"
+          accept="image/*"
+          multiple
+          className="sr-only"
+          onChange={(e) => {
+            const list = e.target.files;
+            if (list && list.length) onAdd(Array.from(list));
+            e.target.value = '';
+          }}
+        />
+      </label>
+      {count > 0 ? (
+        <button
+          type="button"
+          onClick={onClear}
+          aria-label="شيل صور الصف ده"
+          className="text-content-faint transition-colors hover:text-crit"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      ) : null}
+    </div>
+  );
 }
 
 function buildTemplate(catalog: Catalog): string {
@@ -253,10 +334,12 @@ function BulkUploadFlow({ catalog }: { catalog: Catalog }) {
   const [results, setResults] = useState<Record<number, RowResult>>({});
   const [sending, setSending] = useState(false);
   const [finished, setFinished] = useState(false);
+  const [photosByRow, setPhotosByRow] = useState<Record<number, File[]>>({});
   const uploadIdRef = useRef<string>('');
 
   const myListings = useMyListings();
   const bulk = useBulkCreate();
+  const uploadPhoto = useUploadListingPhoto();
 
   /* ── الخطوة ١: القالب ── */
   const downloadTemplate = () => {
@@ -273,10 +356,15 @@ function BulkUploadFlow({ catalog }: { catalog: Catalog }) {
 
   /* ── الخطوة ٢: القراءة ── */
   const onPick = useCallback((file: File) => {
+    if (file.size > MAX_CSV_BYTES) {
+      setParseError(`الملف أكبر من ${MAX_CSV_BYTES / (1024 * 1024)} ميجا — ده أكبر من أي ملف CSV منطقي، تأكد إنك رفعت الملف الصح`);
+      return;
+    }
     setFileName(file.name);
     setParseError(null);
     setResults({});
     setFinished(false);
+    setPhotosByRow({});
     const reader = new FileReader();
     reader.onerror = () => setParseError('مقدرناش نقرا الملف. جرّب تحفظه CSV تاني وارفعه.');
     reader.onload = () => {
@@ -431,6 +519,99 @@ function BulkUploadFlow({ catalog }: { catalog: Catalog }) {
   const patchRow = (index: number, patch: Partial<Row>) =>
     setRows((prev) => prev.map((r) => (r.index === index ? { ...r, ...patch } : r)));
 
+  /* ── صور الصفوف: مجلد كامل بيتوزّع تلقائي حسب اسم الملف ── */
+  const handleFolderPhotos = useCallback(
+    (files: File[]) => {
+      const countError = validateFileCount(files.length, MAX_PHOTOS_PER_UPLOAD);
+      if (countError) {
+        toast({ title: 'المجلد كبير جدًا', body: countError, tone: 'crit' });
+        return;
+      }
+      const byRow = new Map<number, File[]>();
+      let unmatched = 0;
+      let rejected = 0;
+      for (const f of files) {
+        if (validateFile(f, { acceptedTypes: ACCEPTED_IMAGE_TYPES })) {
+          rejected += 1;
+          continue;
+        }
+        const idx = matchRowIndexFromFileName(f.name);
+        if (idx === null || !rows.some((r) => r.index === idx)) {
+          unmatched += 1;
+          continue;
+        }
+        const list = byRow.get(idx) ?? [];
+        list.push(f);
+        byRow.set(idx, list);
+      }
+      if (rejected > 0) {
+        toast({
+          title: `${rejected} ملف متجاهل`,
+          body: 'مش صورة (JPG/PNG/WEBP) أو أكبر من الحد المسموح.',
+          tone: 'info',
+        });
+      }
+      if (byRow.size) {
+        setPhotosByRow((prev) => {
+          const next = { ...prev };
+          for (const [idx, list] of byRow) {
+            next[idx] = [...(next[idx] ?? []), ...list];
+          }
+          return next;
+        });
+      }
+      if (unmatched > 0) {
+        toast({
+          title: `${unmatched} صورة متجاهلة`,
+          body: 'اسم الملف لازم يبدأ برقم الصف في الجدول (زي 1.jpg لصف رقم ١).',
+          tone: 'info',
+        });
+      } else if (byRow.size) {
+        toast({
+          title: 'الصور اتوزعت على الصفوف',
+          body: `${byRow.size} صف استلم صور — راجع عمود «الصور» في الجدول.`,
+          tone: 'ok',
+        });
+      }
+    },
+    [rows, toast],
+  );
+
+  const photosAssignedCount = useMemo(
+    () => Object.values(photosByRow).reduce((sum, list) => sum + list.length, 0),
+    [photosByRow],
+  );
+  const rowsWithPhotos = useMemo(
+    () => Object.values(photosByRow).filter((list) => list.length > 0).length,
+    [photosByRow],
+  );
+
+  /** بعد ما صف ينجح — بترفع صوره واحدة واحدة، فشل صورة مايوقفش الباقي */
+  const uploadRowPhotos = useCallback(
+    async (rowIndex: number, listingId: string, photos: File[]) => {
+      setResults((prev) => {
+        const cur = prev[rowIndex];
+        if (!cur) return prev;
+        return { ...prev, [rowIndex]: { ...cur, photosUploaded: 0, photosTotal: photos.length } };
+      });
+      let uploaded = 0;
+      for (const file of photos) {
+        try {
+          await uploadPhoto.mutateAsync({ id: listingId, file });
+          uploaded += 1;
+        } catch {
+          // بنكمل باقي صور الصف — فشل صورة واحدة مايوقفش نشر الباقي
+        }
+        setResults((prev) => {
+          const cur = prev[rowIndex];
+          if (!cur) return prev;
+          return { ...prev, [rowIndex]: { ...cur, photosUploaded: uploaded } };
+        });
+      }
+    },
+    [uploadPhoto],
+  );
+
   /* ── الخطوة ٤: الإرسال ── */
   const send = async () => {
     if (!readyRows.length) return;
@@ -462,12 +643,16 @@ function BulkUploadFlow({ catalog }: { catalog: Catalog }) {
       await bulk.mutateAsync({
         rows: payload,
         uploadId,
-        onProgress: (i, ok, error) => {
+        onProgress: (i, ok, error, listingId) => {
           const rowIndex = order[i];
           setResults((prev) => ({
             ...prev,
-            [rowIndex]: ok ? { state: 'ok' } : { state: 'fail', error },
+            [rowIndex]: ok ? { state: 'ok', listingId } : { state: 'fail', error },
           }));
+          const photos = photosByRow[rowIndex];
+          if (ok && listingId && photos && photos.length) {
+            void uploadRowPhotos(rowIndex, listingId, photos);
+          }
         },
       });
       setFinished(true);
@@ -490,6 +675,7 @@ function BulkUploadFlow({ catalog }: { catalog: Catalog }) {
     setFileName(null);
     setParseError(null);
     setFinished(false);
+    setPhotosByRow({});
     setStep('upload');
   };
 
@@ -619,6 +805,39 @@ function BulkUploadFlow({ catalog }: { catalog: Catalog }) {
       hideBelow: 'lg',
     },
     {
+      key: 'photos',
+      header: 'الصور',
+      width: 150,
+      render: (r) => (
+        <RowPhotoCell
+          count={(photosByRow[r.index] ?? []).length}
+          onAdd={(files) => {
+            const valid = files.filter((f) => !validateFile(f, { acceptedTypes: ACCEPTED_IMAGE_TYPES }));
+            const rejected = files.length - valid.length;
+            if (rejected > 0) {
+              toast({
+                title: `${rejected} ملف متجاهل`,
+                body: 'مش صورة (JPG/PNG/WEBP) أو أكبر من الحد المسموح.',
+                tone: 'info',
+              });
+            }
+            if (!valid.length) return;
+            setPhotosByRow((prev) => ({
+              ...prev,
+              [r.index]: [...(prev[r.index] ?? []), ...valid],
+            }));
+          }}
+          onClear={() =>
+            setPhotosByRow((prev) => {
+              const next = { ...prev };
+              delete next[r.index];
+              return next;
+            })
+          }
+        />
+      ),
+    },
+    {
       key: 'state',
       header: 'الحالة',
       value: (r) => {
@@ -638,9 +857,19 @@ function BulkUploadFlow({ catalog }: { catalog: Catalog }) {
             );
           if (res.state === 'ok')
             return (
-              <Badge tone="ok" icon={<Check />}>
-                اتنشر
-              </Badge>
+              <div className="space-y-1">
+                <Badge tone="ok" icon={<Check />}>
+                  اتنشر
+                </Badge>
+                {res.photosTotal ? (
+                  <p className="text-caption text-content-sub">
+                    صور:{' '}
+                    <span className="tnum">
+                      {res.photosUploaded ?? 0}/{res.photosTotal}
+                    </span>
+                  </p>
+                ) : null}
+              </div>
             );
           return (
             <div className="space-y-1">
@@ -829,6 +1058,33 @@ function BulkUploadFlow({ catalog }: { catalog: Catalog }) {
               }
             />
 
+            {/* ربط الصور بالصفوف — مجلد كامل، أو صورة بصورة من عمود «الصور» تحت */}
+            {step === 'review' ? (
+              <Card className="mb-4">
+                <SectionHeader
+                  title="صور العربيات (اختياري دلوقتي)"
+                  hint="اختار مجلد صوره اسم كل ملف بيبدأ برقم الصف (1.jpg، 2-جانب.png…) — كل صورة هتتوزّع على صفها تلقائي. تقدر كمان ترفع صور لصف واحد من عمود «الصور» في الجدول."
+                />
+                <FileDrop
+                  label="اسحب مجلد الصور هنا أو دوس للاختيار"
+                  hint="هيتوزع كل ملف على صفه حسب رقمه في اسمه"
+                  icon={<FolderOpen />}
+                  directory
+                  onPickMultiple={handleFolderPhotos}
+                />
+                {photosAssignedCount > 0 ? (
+                  <p className="mt-3 text-sub text-content-sub">
+                    <span className="tnum font-bold text-ok">
+                      {withThousands(photosAssignedCount)}
+                    </span>{' '}
+                    صورة متوزعة على{' '}
+                    <span className="tnum font-bold text-ok">{withThousands(rowsWithPhotos)}</span>{' '}
+                    صف. هيتم رفعها بعد ما الصف ينجح.
+                  </p>
+                ) : null}
+              </Card>
+            ) : null}
+
             {/* عدّاد فوق الجدول */}
             <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
               <Card padded={false} className="px-4 py-3">
@@ -892,6 +1148,7 @@ function BulkUploadFlow({ catalog }: { catalog: Catalog }) {
             ) : null}
 
             <DataTable
+              caption="جدول الرفع بالجملة"
               rows={rows}
               columns={columns}
               rowKey={(r) => String(r.index)}

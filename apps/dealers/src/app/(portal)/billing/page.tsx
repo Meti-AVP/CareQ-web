@@ -36,6 +36,7 @@ import {
 } from '@carq/ui';
 import {
   errorMessage,
+  nowMs,
   useCreateEntry,
   useDealerAuctions,
   useExhibitionStats,
@@ -73,6 +74,8 @@ export default function BillingPage() {
   const liveAuctions = useDealerAuctions('live');
   const stats = useExhibitionStats();
   const createEntry = useCreateEntry();
+  /** FND-036 — ثابتة على ساعة الموك المجمّدة، مش الوقت الحقيقي. */
+  const now = new Date(nowMs());
 
   const [filter, setFilter] = useState<Filter>('all');
   const [pickedAuction, setPickedAuction] = useState('');
@@ -128,7 +131,7 @@ export default function BillingPage() {
         <div>
           <p className="tnum text-sub text-content">{formatDateAr(e.createdAt)}</p>
           {e.paidAt === null ? (
-            <p className="text-caption text-content-faint">مستني من {waitingFor(e.createdAt)}</p>
+            <p className="text-caption text-content-faint">مستني من {waitingFor(e.createdAt, now)}</p>
           ) : null}
         </div>
       ),
@@ -385,6 +388,7 @@ export default function BillingPage() {
           }
         />
         <DataTable
+          caption="جدول رسوم دخول المزادات"
           rows={rows}
           columns={columns}
           rowKey={(e) => e.id}

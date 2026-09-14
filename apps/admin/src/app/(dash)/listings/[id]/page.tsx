@@ -55,6 +55,7 @@ import {
 } from '@carq/ui';
 import {
   errorMessage,
+  nowMs,
   useAudit,
   useListing,
   useRevealPhone,
@@ -164,6 +165,8 @@ export default function ListingDetailPage() {
   const setFlags = useSetListingFlags();
   const setStatus = useSetListingStatus();
 
+  /** FND-036 — ثابتة على ساعة الموك المجمّدة، مش الوقت الحقيقي. */
+  const now = new Date(nowMs());
   const [photoIndex, setPhotoIndex] = useState(0);
   const [pendingFlag, setPendingFlag] = useState<{ key: FlagKey; next: boolean } | null>(null);
   const [pendingStatus, setPendingStatus] = useState<'rejected' | 'removed' | null>(null);
@@ -390,7 +393,7 @@ export default function ListingDetailPage() {
                 <Spec label="عدد الصور" value={withThousands(l.photosCount)} />
                 <Spec
                   label="اتنشر"
-                  value={l.publishedAt ? relTimeAr(l.publishedAt) : 'لسه ما اتنشرش'}
+                  value={l.publishedAt ? relTimeAr(l.publishedAt, now) : 'لسه ما اتنشرش'}
                 />
                 <Spec
                   label="بينتهي في"

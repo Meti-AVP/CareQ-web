@@ -418,6 +418,7 @@ export default function AuctionsPage() {
         </Card>
 
         <DataTable
+          caption="جدول المزادات"
           rows={rows}
           columns={columns}
           rowKey={(a) => a.id}

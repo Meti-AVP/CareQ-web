@@ -565,6 +565,7 @@ export default function AuctionDetailPage() {
               hint="اسم المعرض علني جوه المزاد بالتصميم — من غير تليفونات ولا بيانات تواصل"
             />
             <DataTable
+              caption="جدول المزايدات"
               rows={bidRows}
               columns={bidColumns}
               rowKey={(b) => b.id}
@@ -583,6 +584,7 @@ export default function AuctionDetailPage() {
               hint="الدفع هو الشرط التالت من تلاتة للمزايدة — بعد دور المعرض والتعاقد"
             />
             <DataTable
+              caption="جدول تسجيلات الدخول ورسومها"
               rows={entryRows}
               columns={entryColumns}
               rowKey={(e) => e.id}

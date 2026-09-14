@@ -1,8 +1,16 @@
 'use client';
 
-import { useEffect, useRef, useState, type ChangeEvent, type ClipboardEvent, type KeyboardEvent } from 'react';
-import { useRouter } from 'next/navigation';
-import { ArrowLeft, ChevronRight, Info, Lock, Phone, ShieldCheck } from 'lucide-react';
+import {
+  Suspense,
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type ClipboardEvent,
+  type KeyboardEvent,
+} from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { ArrowLeft, Chrome, ChevronRight, Info, Lock, Phone, ShieldCheck } from 'lucide-react';
 import {
   Button,
   Field,
@@ -11,7 +19,16 @@ import {
   cn,
   formatPhone,
 } from '@carq/ui';
-import { errorMessage, tokenStore } from '@carq/api-client';
+import { errorMessage, requestOtp as apiRequestOtp, verifyOtp as apiVerifyOtp, DEMO_MODE } from '@carq/api-client';
+
+/** رسايل `?error=` الراجعة من `/api/auth/google/callback` — نص عربي جاهز للعرض */
+const GOOGLE_ERROR_MESSAGES: Record<string, string> = {
+  google_not_configured: 'الدخول بجوجل لسه مش متظبط على السيرفر — استخدم كود التليفون.',
+  google_demo_closed: 'وضع الديمو مقفول لدخول جوجل حاليًا — استخدم كود التليفون.',
+  google_cancelled: 'اتلغى الدخول بجوجل.',
+  google_forbidden: 'الحساب ده مش مصرّح له.',
+  google_failed: 'حصل خطأ في الدخول بجوجل — جرّب تاني أو استخدم كود التليفون.',
+};
 
 /**
  * ════════════════════════════════════════════════════════════════
@@ -23,16 +40,15 @@ import { errorMessage, tokenStore } from '@carq/api-client';
  * **مفيش إنشاء حساب أدمن. خالص.** الدور `admin` بيتحط يدوي في
  * الداتابيز (`users.role`) — ده مقصود مش نقص.
  *
- * ──────────────── ملاحظة أمان (مش تفصيلة) ────────────────
- * لما ده يتربط بالباك اند:
- *  · الفلو: POST /v1/auth/otp/request ثم /v1/auth/otp/verify ثم GET /v1/me،
- *    ولو `user.role !== 'admin'` نمسح التوكن ونطلع من غير ما نقول
- *    إن فيه داشبورد.
+ * ──────────────── ملاحظة أمان (المرحلة ٢ — مبنية) ────────────────
+ *  · الفلو: `requestOtp` → `verifyOtp` من `@carq/api-client` (`auth.ts`)
+ *    بينده على POST /v1/auth/otp/request ثم /v1/auth/otp/verify، ولو
+ *    `user.role !== 'admin'` بيمسح التوكن ويرمي خطأ من غير ما يقول
+ *    إن فيه داشبورد أصلًا.
  *  · `access_token` بيتحفظ في **الذاكرة بس** عن طريق `tokenStore` —
- *    مش `localStorage` ولا `sessionStorage`. اللوحة دي فيها أرقام
- *    تليفونات وصور بطاقات، وأي XSS بيقرا localStorage على طول.
- *  · `refresh_token` المفروض يتحفظ في **httpOnly cookie** بيتكتب من
- *    Next route handler (`/api/session/*`) — الجافاسكريبت عمره ما
+ *    مش `localStorage` ولا `sessionStorage`.
+ *  · `refresh_token` بيتحفظ في **httpOnly cookie** بيتكتب من
+ *    route handler (`POST /api/session`) — الجافاسكريبت عمره ما
  *    يشوفه، والتجديد الصامت بيحصل من السيرفر (`I-4`).
  *  · عند 401: تجديد مرة واحدة وإعادة المحاولة، وبعدها خروج
  *    (متطبّق في `client.ts`).
@@ -45,13 +61,30 @@ const EGYPT_MOBILE = /^01[0125]\d{8}$/;
 const OTP_LENGTH = 4;
 const RESEND_SECONDS = 30;
 
+/** `useSearchParams()` محتاجة Suspense boundary عشان الصفحة تفضل static-prerendered */
 export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginForm />
+    </Suspense>
+  );
+}
+
+function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  /** مسار الرجوع بعد الدخول — middleware.ts بيحطه لما يمنع وصول مباشر.
+      لازم مسار داخلي (`/xxx`) بس — غير كده ده باب open-redirect. */
+  const rawNext = searchParams.get('next') ?? '';
+  const next = rawNext.startsWith('/') && !rawNext.startsWith('//') ? rawNext : '/';
+  const googleError = searchParams.get('error');
 
   const [step, setStep] = useState<'phone' | 'otp'>('phone');
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState<string[]>(Array(OTP_LENGTH).fill(''));
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(
+    googleError ? (GOOGLE_ERROR_MESSAGES[googleError] ?? GOOGLE_ERROR_MESSAGES.google_failed!) : null,
+  );
   const [busy, setBusy] = useState(false);
   const [resendIn, setResendIn] = useState(0);
 
@@ -75,7 +108,7 @@ export default function LoginPage() {
   const codeComplete = codeValue.length === OTP_LENGTH;
 
   /* ───────── خطوة ١: الرقم ───────── */
-  async function requestOtp() {
+  async function onRequestOtp() {
     if (!phoneValid) {
       setError('الرقم لازم يكون ١١ رقم ويبدأ بـ 010 أو 011 أو 012 أو 015');
       return;
@@ -83,8 +116,7 @@ export default function LoginPage() {
     setError(null);
     setBusy(true);
     try {
-      // الربط الحقيقي: await http('/v1/auth/otp/request', { method: 'POST', body: { phone: digits } })
-      await new Promise((r) => setTimeout(r, 500));
+      await apiRequestOtp(digits);
       setStep('otp');
       setResendIn(RESEND_SECONDS);
     } catch (e) {
@@ -95,7 +127,7 @@ export default function LoginPage() {
   }
 
   /* ───────── خطوة ٢: الكود ───────── */
-  async function verifyOtp(value = codeValue) {
+  async function onVerifyOtp(value = codeValue) {
     if (value.length !== OTP_LENGTH) {
       setError('اكتب الكود كامل — ٤ أرقام');
       return;
@@ -103,12 +135,11 @@ export default function LoginPage() {
     setError(null);
     setBusy(true);
     try {
-      // الربط الحقيقي: const s = await http('/v1/auth/otp/verify', { ... })
-      //               tokenStore.set(s.access_token, 900)  ← الذاكرة بس
-      //               ثم GET /v1/me والتأكد إن s.user.role === 'admin'
-      await new Promise((r) => setTimeout(r, 600));
-      tokenStore.set('demo-access-token', 900);
-      router.push('/');
+      // لو role !== 'admin': verifyOtp بترمي FORBIDDEN من غير ما تقول
+      // إن فيه داشبورد أصلًا (ADMIN_DASHBOARD_SPEC §2) — نفس الرسالة
+      // بتتعرض زي ما هي (X-4)
+      await apiVerifyOtp(digits, value, 'admin');
+      router.push(next);
     } catch (e) {
       setError(errorMessage(e));
       setBusy(false);
@@ -150,7 +181,7 @@ export default function LoginPage() {
     pasted.split('').forEach((ch, i) => (next[i] = ch));
     setCode(next);
     otpRefs.current[Math.min(pasted.length, OTP_LENGTH - 1)]?.focus();
-    if (pasted.length === OTP_LENGTH) void verifyOtp(pasted);
+    if (pasted.length === OTP_LENGTH) void onVerifyOtp(pasted);
   }
 
   return (
@@ -217,7 +248,7 @@ export default function LoginPage() {
                 className="mt-7 space-y-5"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  void requestOtp();
+                  void onRequestOtp();
                 }}
               >
                 <Field
@@ -257,6 +288,18 @@ export default function LoginPage() {
                   ابعت كود التأكيد
                 </Button>
               </form>
+
+              {/* ───────── بديل: الدخول بجوجل — خيار إضافي جنب الكود، مش بدل منه ───────── */}
+              <div className="my-6 flex items-center gap-3" aria-hidden="true">
+                <span className="h-px flex-1 bg-line" />
+                <span className="text-caption text-content-faint">أو</span>
+                <span className="h-px flex-1 bg-line" />
+              </div>
+              <a href="/api/auth/google" className="block">
+                <Button type="button" variant="outline" size="lg" className="w-full" icon={<Chrome />}>
+                  الدخول بحساب Google
+                </Button>
+              </a>
             </>
           ) : (
             <>
@@ -285,7 +328,7 @@ export default function LoginPage() {
                 className="mt-7 space-y-5"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  void verifyOtp();
+                  void onVerifyOtp();
                 }}
               >
                 {/* الخانات LTR — الأرقام بتتقرا من الشمال لليمين حتى في واجهة عربية */}
@@ -345,8 +388,10 @@ export default function LoginPage() {
                     <button
                       type="button"
                       onClick={() => {
+                        void apiRequestOtp(digits);
                         setResendIn(RESEND_SECONDS);
                         setCode(Array(OTP_LENGTH).fill(''));
+                        setError(null);
                         otpRefs.current[0]?.focus();
                       }}
                       className="text-caption font-bold text-accent transition-opacity hover:opacity-75"
@@ -371,9 +416,11 @@ export default function LoginPage() {
             </p>
           </div>
 
-          <p className="mt-4 text-center text-caption text-content-faint">
-            وضع الديمو: أي رقم مصري صحيح وأي كود بيعدّي — مفيش باك اند متوصّل لسه.
-          </p>
+          {DEMO_MODE ? (
+            <p className="mt-4 text-center text-caption text-content-faint">
+              وضع الديمو: أي رقم مصري صحيح وأي كود بيعدّي — مفيش باك اند متوصّل لسه.
+            </p>
+          ) : null}
         </div>
       </section>
     </div>

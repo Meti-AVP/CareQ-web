@@ -43,7 +43,7 @@ import {
   withThousands,
   type Tone,
 } from '@carq/ui';
-import { errorMessage, useAudit } from '@carq/api-client';
+import { errorMessage, nowMs, useAudit } from '@carq/api-client';
 import type { AuditAction, AuditEntry } from '@carq/api-client';
 
 /**
@@ -262,6 +262,11 @@ export default function AuditPage() {
   const [entityType, setEntityType] = useState('all');
   const [action, setAction] = useState('all');
   const [q, setQ] = useState('');
+  /** FND-037 — الفاعل والتاريخ فلترة سيرفر-سايد على السجل كله، مش
+   * بحث نصي محلي على الصفحة المعروضة بس. */
+  const [actor, setActor] = useState('');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
   const [openId, setOpenId] = useState<string | null>(null);
 
   /** ترقيم بالـcursor — «أقدم» بينزل صفحة، و«أحدث» بيرجع */
@@ -272,8 +277,10 @@ export default function AuditPage() {
     setTrail([]);
   };
 
-  const audit = useAudit({ entityType, action, cursor });
+  const audit = useAudit({ entityType, action, actor, from, to, cursor });
 
+  /** البحث ده بيدوّر في السبب/رقم الكيان/اسم الأكشن — الصفحة المعروضة
+   * بس (٣٠ صف)، لأن دول مش عندهم فلتر سيرفر مخصّص زي الفاعل والتاريخ. */
   const rows = useMemo(() => {
     const items = audit.data?.items ?? [];
     const needle = q.trim().toLowerCase();
@@ -282,7 +289,6 @@ export default function AuditPage() {
       const meta = actionMeta(e.action);
       const reason = payloadReason(e.payload) ?? '';
       return (
-        e.actorName.toLowerCase().includes(needle) ||
         e.entityId.toLowerCase().includes(needle) ||
         entityLabel(e.entityType).toLowerCase().includes(needle) ||
         meta.label.toLowerCase().includes(needle) ||
@@ -291,7 +297,13 @@ export default function AuditPage() {
     });
   }, [audit.data, q]);
 
-  const filtered = entityType !== 'all' || action !== 'all' || q.trim().length > 0;
+  const filtered =
+    entityType !== 'all' ||
+    action !== 'all' ||
+    q.trim().length > 0 ||
+    actor.trim().length > 0 ||
+    from.length > 0 ||
+    to.length > 0;
 
   return (
     <>
@@ -358,13 +370,54 @@ export default function AuditPage() {
               </Select>
             </Field>
 
-            <Field label="بحث" hint="بيدوّر في الفاعل والسبب ورقم الكيان">
+            <Field label="الفاعل" hint="اسم الأدمن — بيدوّر في السجل كله">
+              <div className="relative">
+                <Search className="pointer-events-none absolute inset-y-0 start-3 my-auto h-4 w-4 text-content-faint" />
+                <Input
+                  value={actor}
+                  onChange={(e) => {
+                    setActor(e.target.value);
+                    resetPage();
+                  }}
+                  placeholder="اسم الأدمن…"
+                  className="ps-9"
+                />
+              </div>
+            </Field>
+
+            <Field label="من تاريخ">
+              <input
+                type="date"
+                value={from}
+                onChange={(e) => {
+                  setFrom(e.target.value);
+                  resetPage();
+                }}
+                aria-label="من تاريخ"
+                className="h-11 w-full rounded-sm border border-line bg-surface-alt px-3 text-body text-content outline-none focus:border-accent"
+              />
+            </Field>
+
+            <Field label="إلى تاريخ">
+              <input
+                type="date"
+                value={to}
+                onChange={(e) => {
+                  setTo(e.target.value);
+                  resetPage();
+                }}
+                aria-label="إلى تاريخ"
+                className="h-11 w-full rounded-sm border border-line bg-surface-alt px-3 text-body text-content outline-none focus:border-accent"
+              />
+            </Field>
+
+            <Field label="بحث" hint="بيدوّر في السبب ورقم الكيان واسم الأكشن">
               <div className="relative">
                 <Search className="pointer-events-none absolute inset-y-0 start-3 my-auto h-4 w-4 text-content-faint" />
                 <Input
                   value={q}
                   onChange={(e) => setQ(e.target.value)}
-                  placeholder="اسم الأدمن، السبب، رقم الكيان…"
+                  placeholder="السبب، رقم الكيان…"
                   className="ps-9"
                 />
               </div>
@@ -375,9 +428,9 @@ export default function AuditPage() {
           <p className="mt-4 flex items-start gap-2 border-t border-line pt-3.5 text-caption text-content-sub">
             <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             <span>
-              الشاشة بتبعت `cursor` وبتقلّب صفحة صفحة — الباك لازم يحترمه (§6.3). البحث
-              النصي بيدوّر في الصفحة المعروضة بس؛ فلترة الكيان والأكشن بتحصل في السيرفر
-              على السجل كله.
+              الشاشة بتبعت `cursor` وبتقلّب صفحة صفحة — الباك لازم يحترمه (§6.3). فلترة
+              الكيان والأكشن والفاعل والتاريخ (FND-037) بتحصل في السيرفر على السجل كله؛
+              مربّع «بحث» بس هو اللي بيدوّر في الصفحة المعروضة (٣٠ صف).
             </span>
           </p>
         </Card>
@@ -484,6 +537,8 @@ function TimelineRow({
 }) {
   const meta = actionMeta(entry.action);
   const reason = payloadReason(entry.payload);
+  /** FND-036 — ثابتة على ساعة الموك المجمّدة، مش الوقت الحقيقي. */
+  const now = new Date(nowMs());
   const entity = ENTITIES[entry.entityType];
   const href = entity?.href ? entity.href(entry.entityId) : null;
   const extras = Object.entries(entry.payload).filter(([k]) => !REASON_KEYS.includes(k));
@@ -519,7 +574,7 @@ function TimelineRow({
           </div>
 
           <div className="shrink-0 text-end">
-            <p className="text-sub font-bold text-content">{relTimeAr(entry.createdAt)}</p>
+            <p className="text-sub font-bold text-content">{relTimeAr(entry.createdAt, now)}</p>
             <p className="tnum text-caption text-content-faint">
               {formatDateTimeAr(entry.createdAt)}
             </p>

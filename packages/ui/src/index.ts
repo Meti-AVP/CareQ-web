@@ -5,6 +5,7 @@ export { cn } from './lib/cn';
 export { csvCell, buildCsv, downloadCsv } from './lib/csv';
 export * from './lib/format';
 export * from './lib/date';
+export * from './lib/upload';
 
 export { StrokeMotif, type MotifKind } from './components/StrokeMotif';
 export { PageHeader, Sheet, SectionHeader } from './components/PageHeader';
@@ -42,6 +43,8 @@ export {
   Countdown,
   ToastProvider,
   useToast,
+  SessionLoading,
+  SessionExpired,
   type TabDef,
 } from './components/Feedback';
 

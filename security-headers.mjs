@@ -17,6 +17,20 @@
 
 const isDev = process.env.NODE_ENV !== 'production';
 
+/**
+ * هل السيرفر فعليًا وراه HTTPS؟ **مش نفس معنى `NODE_ENV=production`.**
+ * باج حقيقي اتلقط أثناء المرحلة ٥: تشغيل `next start` محليًا (بناء
+ * إنتاجي، `NODE_ENV=production`، بس HTTP عادي بلا TLS) كان بيبعت HSTS +
+ * `upgrade-insecure-requests` — والمتصفح فعليًا بيحاول يرقّي أي طلب/
+ * تنقّل تالٍ لنفس الأصل لـHTTPS (بما فيها الـprefetch الداخلي بتاع
+ * Next لصفحة `/login`)، وده بيفشل بـ`ERR_SSL_PROTOCOL_ERROR` لأنه مفيش
+ * سيرفر TLS بيسمع أصلًا — مش «مالوش أثر» زي ما كان مفترض هنا قبل كده.
+ * `Vercel` (منصة النشر الموصى بيها، `DEPLOYMENT.md`) بيحط `VERCEL=1`
+ * تلقائيًا في بيئة التشغيل — ده إشارة حقيقية إن HTTPS متفروض من عندهم.
+ * استضافة تانية وراها HTTPS فعليًا؟ حطّوا `FORCE_HTTPS_HEADERS=true`.
+ */
+const isHttpsDeployment = Boolean(process.env.VERCEL) || process.env.FORCE_HTTPS_HEADERS === 'true';
+
 /** أصل خارجي من متغير بيئة — بيرجع '' لو مش متظبط أو مش URL سليم */
 function originOf(envValue) {
   if (!envValue) return '';
@@ -46,7 +60,9 @@ const csp = [
   `form-action 'self'`,
   // اللوحات دي عمرها ما بتتعرض جوه iframe — قفل clickjacking نهائي
   `frame-ancestors 'none'`,
-  ...(isDev ? [] : ['upgrade-insecure-requests']),
+  // مش isDev بس — لو مفيش HTTPS فعلي وراه (اختبار محلي لبناء إنتاجي
+  // مثلاً)، ترقية الطلبات لـHTTPS بتكسر كل نداء لاحق لنفس الأصل
+  ...(isHttpsDeployment ? ['upgrade-insecure-requests'] : []),
 ].join('; ');
 
 export const securityHeaders = [
@@ -63,13 +79,15 @@ export const securityHeaders = [
     value: 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
   },
   { key: 'Cross-Origin-Opener-Policy', value: 'same-origin' },
-  // HSTS بيشتغل فعليًا مع HTTPS بس — وجوده مع HTTP مالوش أثر
-  ...(isDev
-    ? []
-    : [
+  // HSTS بيخلي المتصفح يفرض HTTPS على أي طلب تالٍ لنفس الأصل — لازم
+  // يبقى فيه TLS فعلي وراه، غير كده أي نداء لاحق (حتى الداخلي من Next
+  // نفسه) بيفشل بـERR_SSL_PROTOCOL_ERROR (`isHttpsDeployment` فوق)
+  ...(isHttpsDeployment
+    ? [
         {
           key: 'Strict-Transport-Security',
           value: 'max-age=63072000; includeSubDomains',
         },
-      ]),
+      ]
+    : []),
 ];

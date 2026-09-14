@@ -2,8 +2,46 @@
 
 export * from './types';
 export { ApiError, errorMessage, errorCode } from './errors';
-export { http, API_URL, USE_MOCK, tokenStore, idempotencyKey } from './client';
+export {
+  http,
+  API_URL,
+  USE_MOCK,
+  DEMO_MODE,
+  REPORT_TIMEOUT_MS,
+  tokenStore,
+  idempotencyKey,
+  refreshSession,
+} from './client';
 export { nowMs } from './time';
+
+/** الريل تايم — المرحلة ٦ (docs/REALTIME.md) */
+export {
+  useRealtime,
+  type RealtimeFrame,
+  type RealtimeStatus,
+  type BidPlacedData,
+  type AuctionExtendedData,
+  type AuctionEndedData,
+} from './realtime';
+
+/** طبقة الجلسة — المرحلة ٢ (docs/AUTH.md) */
+export { requestOtp, verifyOtp, endSession, type VerifyOtpResult } from './auth';
+export {
+  SessionProvider,
+  useSession,
+  type SessionStatus,
+  type SessionValue,
+} from './session-context';
+
+/** نموذج الصلاحيات المركزي — المرحلة ٣ (docs/PERMISSIONS.md) */
+export {
+  can,
+  bidBlockCode,
+  BID_BLOCK_LABEL_AR,
+  BID_BLOCK_HINT_AR,
+  type AdminAction,
+  type BidConditions,
+} from './permissions';
 
 export * from './admin/hooks';
 export * from './dealers/hooks';

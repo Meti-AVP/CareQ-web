@@ -35,7 +35,7 @@ import {
   secondsUntil,
   withThousands,
 } from '@carq/ui';
-import { errorMessage, USE_MOCK, useMyApplication } from '@carq/api-client';
+import { errorMessage, nowMs, USE_MOCK, useMyApplication } from '@carq/api-client';
 import type { ApplicationStatus, ExhibitionApplication } from '@carq/api-client';
 
 /**
@@ -143,11 +143,13 @@ export default function ApplyStatusPage() {
 
   /** الشاشة المعروضة: في الموك بنتبع المبدّل، في الحقيقي بنتبع الطلب */
   const status: ApplicationStatus = USE_MOCK ? demoStatus : (app?.status ?? 'submitted');
+  /** FND-036 — ثابتة على ساعة الموك المجمّدة، مش الوقت الحقيقي. */
+  const now = new Date(nowMs());
 
   const reapplyAt = app?.reviewedAt
     ? new Date(new Date(app.reviewedAt).getTime() + REAPPLY_DAYS * DAY_SECONDS * 1000)
     : null;
-  const reapplyDaysLeft = reapplyAt ? Math.ceil(secondsUntil(reapplyAt) / DAY_SECONDS) : 0;
+  const reapplyDaysLeft = reapplyAt ? Math.ceil(secondsUntil(reapplyAt, now) / DAY_SECONDS) : 0;
 
   const headerSubtitle: Record<ApplicationStatus, string> = {
     draft: 'طلبك لسه مسودة — مامتبعتش',
@@ -229,7 +231,7 @@ export default function ApplyStatusPage() {
                       اللي كتبته محفوظ. الطلب ماوصلناش لسه — عشان المراجعة تبدأ لازم تبعته.
                     </p>
                     <p className="mt-2 text-caption text-content-faint">
-                      آخر تعديل {relTimeAr(app.createdAt)}
+                      آخر تعديل {relTimeAr(app.createdAt, now)}
                     </p>
                     <Link href="/apply" className="mt-4 inline-block">
                       <Button icon={<ClipboardList />} iconEnd={<ArrowLeft />}>
@@ -266,7 +268,7 @@ export default function ApplyStatusPage() {
                         اتقدّم {formatDateAr(app.createdAt)}
                       </Badge>
                       <Badge tone="accent" icon={<Hourglass />}>
-                        {relTimeAr(app.createdAt)} في الطابور
+                        {relTimeAr(app.createdAt, now)} في الطابور
                       </Badge>
                     </div>
                   </div>

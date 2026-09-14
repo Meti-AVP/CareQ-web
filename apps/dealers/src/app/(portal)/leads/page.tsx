@@ -30,7 +30,7 @@ import {
   axisDayLabel,
   cairoDayKey,
   cn,
-  formatPhone,
+  maskPhone,
   relTimeAr,
   seriesColor,
   useToast,
@@ -39,6 +39,7 @@ import {
 } from '@carq/ui';
 import {
   errorMessage,
+  nowMs,
   useLeadMessages,
   useMarkLeadRead,
   useMyLeads,
@@ -77,6 +78,8 @@ export default function LeadsPage() {
 
   const [openThread, setOpenThread] = useState<ChatThread | null>(null);
   const markRead = useMarkLeadRead();
+  /** FND-036 — ثابتة على ساعة الموك المجمّدة، مش الوقت الحقيقي. */
+  const now = new Date(nowMs());
 
   const openConversation = (t: ChatThread) => {
     setOpenThread(t);
@@ -150,7 +153,7 @@ export default function LeadsPage() {
             <p className="truncate text-sub font-bold text-content">{t.withName}</p>
             <p className="tnum flex items-center gap-1 text-caption text-content-sub">
               <Phone className="h-3 w-3" />
-              {formatPhone(t.withPhone)}
+              {maskPhone(t.withPhone)}
             </p>
           </div>
         </div>
@@ -176,7 +179,9 @@ export default function LeadsPage() {
       width: 120,
       sortable: true,
       value: (t) => -new Date(t.lastMessageAt).getTime(),
-      render: (t) => <span className="text-sub text-content-sub">{relTimeAr(t.lastMessageAt)}</span>,
+      render: (t) => (
+        <span className="text-sub text-content-sub">{relTimeAr(t.lastMessageAt, now)}</span>
+      ),
     },
     {
       key: 'unread',
@@ -332,6 +337,7 @@ export default function LeadsPage() {
           hint="اضغط على أي صف تفتح المحادثة وترد — الصف الأصفر مستني أول رد منك"
         />
         <DataTable
+          caption="جدول الاستفسارات"
           rows={rows}
           columns={columns}
           rowKey={(t) => t.id}
@@ -363,6 +369,8 @@ export default function LeadsPage() {
 /** فقاعة رسالة — رسايلي كحلي ناحية الشمال، والمشتري رمادي ناحية اليمين (عُرف الشات العربي) */
 function Bubble({ msg }: { msg: ChatMessage }) {
   const mine = msg.from === 'exhibition';
+  /** FND-036 — ثابتة على ساعة الموك المجمّدة، مش الوقت الحقيقي. */
+  const now = new Date(nowMs());
   // في RTL: justify-end = شمال الشاشة (نهاية سطر القراءة)
   return (
     <div className={cn('flex', mine ? 'justify-end' : 'justify-start')}>
@@ -374,7 +382,7 @@ function Bubble({ msg }: { msg: ChatMessage }) {
       >
         <p className="whitespace-pre-wrap break-words text-sub">{msg.body}</p>
         <p className={cn('mt-1 text-caption', mine ? 'text-white/55' : 'text-content-faint')}>
-          {mine ? 'إنت' : ''} {relTimeAr(msg.at)}
+          {mine ? 'إنت' : ''} {relTimeAr(msg.at, now)}
         </p>
       </div>
     </div>
@@ -423,7 +431,7 @@ function ConversationDialog({
       open
       onClose={onClose}
       title={thread.withName}
-      subtitle={`${thread.listing.title} ${thread.listing.year} · ${formatPhone(thread.withPhone)}`}
+      subtitle={`${thread.listing.title} ${thread.listing.year} · ${maskPhone(thread.withPhone)}`}
       size="md"
       footer={
         <form

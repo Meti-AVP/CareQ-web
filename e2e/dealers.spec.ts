@@ -1,3 +1,6 @@
+import { mkdtempSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import path from 'path';
 import { expect, test } from '@playwright/test';
 import { DEALERS, expectCleanConsole, expectHeading, open, watchConsole } from './helpers';
 
@@ -9,6 +12,8 @@ import { DEALERS, expectCleanConsole, expectHeading, open, watchConsole } from '
  */
 
 test.describe('بوابة المعارض — كل الشاشات بتفتح نضيفة', () => {
+  // /login مش هنا: زيارتها وإحنا داخلين بجلسة بترجّع لـ/ (المرحلة ٢) —
+  // شوف 'تسجيل الدخول من غير جلسة سابقة' تحت لاختبار /login فعليًا.
   for (const [path, name] of [
     ['/', 'الرئيسية'],
     ['/inventory', 'المخزون'],
@@ -22,7 +27,6 @@ test.describe('بوابة المعارض — كل الشاشات بتفتح نض
     ['/profile', 'الملف'],
     ['/apply', 'طلب الانضمام'],
     ['/apply/status', 'حالة الطلب'],
-    ['/login', 'الدخول'],
   ] as const) {
     test(`${name} (${path})`, async ({ page }) => {
       const errors = watchConsole(page);
@@ -99,6 +103,53 @@ test('الرفع بالجملة: تحميل القالب ثم رفع ملف في
   expectCleanConsole(errors);
 });
 
+test('الرفع بالجملة: ربط صور من مجلد بالصفوف ورفعها فعليًا بعد النجاح (FND-034)', async ({
+  page,
+}) => {
+  const errors = watchConsole(page);
+  await open(page, DEALERS + '/inventory/bulk');
+
+  // من خطوة القالب لخطوة الرفع — من غير ما نحمّل القالب فعليًا
+  await page.getByRole('button', { name: 'عندي الملف جاهز' }).click();
+
+  // ملف بصف واحد سليم بالكامل — عشان نضمن إن الإرسال يشتغل
+  const csv = [
+    'make,model,year,price,km,transmission,body,color,governorate,area,description',
+    'تويوتا,ياريس,2005,180000,150000,أوتوماتيك,هاتشباك,أحمر,القاهرة,مدينة نصر,عربية لاختبار ربط الصور',
+  ].join('\n');
+
+  const fileInput = page.locator('input[type="file"]').first();
+  await fileInput.setInputFiles({
+    name: 'cars.csv',
+    mimeType: 'text/csv',
+    buffer: Buffer.from('﻿' + csv, 'utf8'),
+  });
+
+  await expect(page.getByText('سليم').first()).toBeVisible();
+  // قبل ربط أي صورة، عمود الصور بيقول «ولا صورة»
+  await expect(page.getByText('ولا صورة').first()).toBeVisible();
+
+  // مجلد صور حقيقي على القرص — اسم كل ملف بيبدأ برقم الصف (١-indexed): الصف الأول رقمه ١
+  // (خانة `webkitdirectory` مش بتقبل من Playwright غير مسار مجلد فعلي، مش بافرات)
+  const dir = mkdtempSync(path.join(tmpdir(), 'carq-bulk-photos-'));
+  writeFileSync(path.join(dir, '1-front.jpg'), 'fake-image-1');
+  writeFileSync(path.join(dir, '1-side.jpg'), 'fake-image-2');
+
+  const folderInput = page.getByLabel('اسحب مجلد الصور هنا أو دوس للاختيار');
+  await folderInput.setInputFiles(dir);
+
+  // اتوزعت على الصف الوحيد — عمود الصور دلوقتي بيقول «2 صورة»
+  await expect(page.getByText('2 صورة').first()).toBeVisible();
+
+  await page.getByRole('button', { name: /^ابعت/ }).click();
+
+  // بعد الإرسال: الصف اتنشر، والصورتين اترفعوا فعليًا (2/2)
+  await expect(page.getByText('اتنشر').first()).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText('2/2')).toBeVisible({ timeout: 15_000 });
+
+  expectCleanConsole(errors);
+});
+
 test('المزادات: فتح مزاد وقراءة صندوق المزايدة بحالته الحقيقية', async ({ page }) => {
   const errors = watchConsole(page);
   await open(page, DEALERS + '/auctions');
@@ -161,4 +212,56 @@ test('المهتمين: تليفونات المشترين ظاهرة والتو�
   await open(page, DEALERS + '/leads');
   await expectHeading(page);
   expectCleanConsole(errors);
+});
+
+test.describe('تسجيل الدخول من غير جلسة سابقة (المرحلة ٢)', () => {
+  // نبدأ من غير أي كوكي — عكس باقي الملف اللي جلسته جاهزة من global-setup.ts
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test('الدخول: تليفون ثم كود ٦ أرقام ثم الوصول للوحة المعرض', async ({ page }) => {
+    const errors = watchConsole(page);
+    await open(page, DEALERS + '/login');
+
+    await page.getByLabel('تليفون المعرض').fill('01001234567');
+    await page.getByRole('button', { name: 'ابعت الكود' }).click();
+    await expect(page.getByText('اكتب الكود')).toBeVisible();
+
+    await page.getByLabel('كود التأكيد').fill('123456');
+    await page.getByRole('button', { name: 'دخول' }).click();
+
+    await page.waitForURL(DEALERS + '/');
+    await expectHeading(page);
+    expectCleanConsole(errors);
+  });
+
+  test('وصول مباشر لمسار محمي من غير جلسة بيرجّع لـ/login مع ?next=', async ({ page }) => {
+    await page.goto(DEALERS + '/inventory');
+    await page.waitForURL(/\/login\?next=%2Finventory/);
+    await expect(page.getByRole('heading', { name: 'دخول المعرض' })).toBeVisible();
+  });
+
+  test('apply و apply/status متاحين من غير جلسة (مسار عام مقصود)', async ({ page }) => {
+    await open(page, DEALERS + '/apply');
+    await expectHeading(page);
+    await open(page, DEALERS + '/apply/status');
+    await expectHeading(page);
+  });
+
+  test('دخول برقم أدمن حقيقي (دور غلط) بيترفض من غير ما يقول إن فيه بوابة أصلًا', async ({
+    page,
+  }) => {
+    await open(page, DEALERS + '/login');
+    // 01001234553 = ADMIN_USER في بيانات الموك — موجود فعليًا بس دوره
+    // admin مش exhibition (getMockIdentity في mock/db.ts بترجع هويته
+    // الحقيقية بدل صاحب المعرض التجريبي لما الرقم يتطابق مع مستخدم حقيقي)
+    await page.getByLabel('تليفون المعرض').fill('01001234553');
+    await page.getByRole('button', { name: 'ابعت الكود' }).click();
+    await expect(page.getByText('اكتب الكود')).toBeVisible();
+
+    await page.getByLabel('كود التأكيد').fill('123456');
+    await page.getByRole('button', { name: 'دخول' }).click();
+
+    await expect(page.getByText('الحساب ده مش مصرّح له')).toBeVisible();
+    await expect(page).toHaveURL(/\/login/);
+  });
 });

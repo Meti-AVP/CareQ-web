@@ -485,6 +485,7 @@ export default function AuctionsPage() {
           hint="سعر البداية ٨٥٪ من سعر الإعلان · التمديد بيحصل تلقائي مع أي مزايدة في آخر دقايق عشان يمنع القنص"
         />
         <DataTable
+          caption="جدول المزادات"
           rows={rows}
           columns={columns}
           rowKey={(a) => a.id}
@@ -643,6 +644,7 @@ export default function AuctionsPage() {
           hint="كل معرض هنا سجّل في مزاد ومادفعش — يعني مش قادر يزايد. الرسوم لسه بصفر في الباك: سياسة الرسوم قرار تجاري لسه مااتاخدش."
         />
         <DataTable
+          caption="جدول رسوم دخول المزاد المستنية تأكيد"
           rows={unpaid}
           columns={entryColumns}
           rowKey={(e) => e.id}

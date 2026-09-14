@@ -43,6 +43,7 @@ import {
 } from '@carq/ui';
 import {
   errorMessage,
+  nowMs,
   useAudit,
   useListing,
   useSellNowRequest,
@@ -136,7 +137,11 @@ export default function SellNowRequestPage() {
   const [offerOpen, setOfferOpen] = useState(false);
   const [collectOpen, setCollectOpen] = useState(false);
 
-  const late = r ? r.status === 'pending' && hoursSince(r.createdAt) > 24 : false;
+  /** FND-036 — ثابتة على ساعة الموك المجمّدة عشان حساب SLA الـ٢٤ ساعة
+   * ما يتأثرش بمرور وقت التشغيل الفعلي. ملفوفة بـ`useMemo` عشان مرجعها
+   * يفضل ثابت بين الريندرات (`auditColumns` تحت معتمدة عليها). */
+  const now = useMemo(() => new Date(nowMs()), []);
+  const late = r ? r.status === 'pending' && hoursSince(r.createdAt, now) > 24 : false;
 
   const auditColumns: Array<Column<AuditEntry>> = useMemo(
     () => [
@@ -159,7 +164,7 @@ export default function SellNowRequestPage() {
         value: (e) => e.createdAt,
         render: (e) => (
           <span className="text-content-sub" title={formatDateTimeAr(e.createdAt)}>
-            {relTimeAr(e.createdAt)}
+            {relTimeAr(e.createdAt, now)}
           </span>
         ),
       },
@@ -171,7 +176,7 @@ export default function SellNowRequestPage() {
         render: (e) => <span className="text-content-sub">{payloadText(e) || '—'}</span>,
       },
     ],
-    [],
+    [now],
   );
 
   return (
@@ -244,8 +249,8 @@ export default function SellNowRequestPage() {
                 icon={late ? <AlertTriangle /> : <Hourglass />}
                 title={
                   late
-                    ? `البائع مستني قرارك بقاله ${waitingFor(r.createdAt)} — عدّى الـ٢٤ ساعة`
-                    : `البائع مستني قرارك بقاله ${waitingFor(r.createdAt)}`
+                    ? `البائع مستني قرارك بقاله ${waitingFor(r.createdAt, now)} — عدّى الـ٢٤ ساعة`
+                    : `البائع مستني قرارك بقاله ${waitingFor(r.createdAt, now)}`
                 }
                 action={
                   <Button
@@ -493,6 +498,7 @@ export default function SellNowRequestPage() {
               }
             />
             <DataTable
+              caption="جدول سجل تدقيق الطلب"
               rows={audit.data?.items ?? []}
               columns={auditColumns}
               rowKey={(e) => e.id}

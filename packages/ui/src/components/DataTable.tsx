@@ -39,6 +39,8 @@ export interface DataTableProps<T> {
   rows: T[];
   columns: Array<Column<T>>;
   rowKey: (row: T) => string;
+  /** اسم الجدول لقارئ الشاشة — `<caption>` مخفي بصريًا (المرحلة ٨، a11y) */
+  caption?: string;
   loading?: boolean;
   error?: string;
   onRetry?: () => void;
@@ -70,6 +72,7 @@ export function DataTable<T>({
   rows,
   columns,
   rowKey,
+  caption,
   loading,
   error,
   onRetry,
@@ -205,6 +208,7 @@ export function DataTable<T>({
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full border-collapse">
+            {caption ? <caption className="sr-only">{caption}</caption> : null}
             <thead>
               <tr className="bg-surface-alt">
                 {columns.map((c) => (
@@ -249,6 +253,7 @@ export function DataTable<T>({
                 return (
                   <tr
                     key={rowKey(row)}
+                    data-row-id={rowKey(row)}
                     onClick={onRowClick ? () => onRowClick(row) : undefined}
                     className={cn(
                       'border-b border-line transition-colors last:border-0',

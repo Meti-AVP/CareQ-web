@@ -41,6 +41,8 @@ import {
   formatPct,
   useToast,
   withThousands,
+  validateFile,
+  ACCEPTED_IMAGE_TYPES,
 } from '@carq/ui';
 import {
   errorMessage,
@@ -111,7 +113,7 @@ export default function ListingDetailPage() {
   const [soldOpen, setSoldOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [photoOpen, setPhotoOpen] = useState(false);
-  const [photoName, setPhotoName] = useState<string | null>(null);
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
 
   const l = listing.data;
 
@@ -315,7 +317,7 @@ export default function ListingDetailPage() {
                 size="sm"
                 icon={<ImagePlus />}
                 onClick={() => {
-                  setPhotoName(null);
+                  setPhotoFile(null);
                   setPhotoOpen(true);
                 }}
               >
@@ -584,7 +586,7 @@ export default function ListingDetailPage() {
                   icon={<ImagePlus />}
                   className="ms-auto"
                   onClick={() => {
-                    setPhotoName(null);
+                    setPhotoFile(null);
                     setPhotoOpen(true);
                   }}
                 >
@@ -701,11 +703,11 @@ export default function ListingDetailPage() {
             </Button>
             <Button
               variant="primary"
-              disabled={!photoName}
+              disabled={!photoFile}
               loading={uploadPhoto.isPending}
               onClick={() =>
                 uploadPhoto.mutate(
-                  { id: l.id },
+                  { id: l.id, file: photoFile ?? undefined },
                   {
                     onSuccess: () => {
                       toast({
@@ -736,8 +738,15 @@ export default function ListingDetailPage() {
             label="اختار صورة العربية"
             hint="JPG أو PNG"
             accept="image/*"
-            fileName={photoName}
-            onPick={(f) => setPhotoName(f.name)}
+            fileName={photoFile?.name ?? null}
+            onPick={(f) => {
+              const error = validateFile(f, { acceptedTypes: ACCEPTED_IMAGE_TYPES });
+              if (error) {
+                toast({ tone: 'crit', title: 'الصورة مرفوضة', body: error });
+                return;
+              }
+              setPhotoFile(f);
+            }}
             icon={<ImagePlus />}
           />
         </div>

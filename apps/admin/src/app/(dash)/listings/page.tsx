@@ -386,6 +386,19 @@ export default function ListingsPage() {
           <span className="whitespace-nowrap text-content-faint">لسه ما اتنشرش</span>
         ),
     },
+    {
+      key: 'expiresAt',
+      header: 'تاريخ الانتهاء',
+      sortable: true,
+      hideBelow: 'xl',
+      value: (l) => l.expiresAt ?? '',
+      render: (l) =>
+        l.expiresAt ? (
+          <span className="whitespace-nowrap text-content-sub">{formatDateAr(l.expiresAt)}</span>
+        ) : (
+          <span className="whitespace-nowrap text-content-faint">—</span>
+        ),
+    },
   ];
 
   return (
@@ -577,6 +590,7 @@ export default function ListingsPage() {
         ) : null}
 
         <DataTable
+          caption="جدول الإعلانات"
           rows={rows}
           columns={columns}
           rowKey={(l) => l.id}

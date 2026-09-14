@@ -17,9 +17,23 @@ import { defineConfig, devices } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './e2e',
+  // realtime.spec.ts محتاج webServer مختلف تمامًا (mock-backend.mjs +
+  // NEXT_PUBLIC_API_URL — تفاصيل playwright.realtime.config.ts) وبيفشل
+  // هنا لأن كل سياق متصفح في وضع الموك الافتراضي معزول عن التاني
+  // (مفيش حالة مشتركة). شغّله بـ`npm run e2e:realtime` بس.
+  testIgnore: /realtime\.spec\.ts/,
   outputDir: './e2e/test-results',
   fullyParallel: true,
-  workers: 2, // سيرفرين dev بيترجموا الصفحات عند أول طلب — أكتر من كده بيزاحم
+  // الحل الجذري لبطء/تضخّم الذاكرة (موثّق بالكامل في
+  // reports/PHASE-5-BACKEND-READINESS.md): السبب مش عدد الـworkers —
+  // السبب إن `next dev` بيترجم كل route عند أول طلب ويسيبها كاش في
+  // الذاكرة (سلوك webpack dev mode الطبيعي). سيرفرين dev لوحدهم وصلوا
+  // ٤+ جيجا رامات بعد تصفّح ٢٠+ شاشة، وعلى جهاز بـ١٦ جيجا كده الذاكرة
+  // الحرة توصل ٢ جيجا بس والنظام كله (حتى أوامر بره المشروع) بيولّع.
+  // الحل: `webServer` تحت بيبني وينفّذ نسخة إنتاجية (`next build` +
+  // `next start`) بدل `dev` — سيرفر خفيف من الأساس، مفيش ترجمة عند
+  // الطلب، مفيش تراكم ذاكرة. رجّعنا الـworkers لـ٢ بأمان بعد الحل ده.
+  workers: 2,
   // أول زيارة لصفحة على سيرفر dev بارد ممكن تعدي المهلة — إعادة واحدة بتمتص
   // الرعشة دي، والتقرير بيعلّم الاختبار «flaky» فمفيش فشل حقيقي بيتغطى
   retries: 1,
@@ -27,11 +41,17 @@ export default defineConfig({
   expect: { timeout: 15_000 },
   reporter: [['list'], ['html', { outputFolder: 'e2e/report', open: 'never' }]],
 
+  // تسجيل دخول حقيقي مرة واحدة للوحتين (المرحلة ٢) — الكوكي المحفوظة
+  // بتتحمّل تلقائي في كل اختبار جديد. اللي محتاج يبدأ من غير جلسة
+  // بيعمل override بـ`test.use({ storageState: { cookies: [], origins: [] } })`.
+  globalSetup: './e2e/global-setup.ts',
+
   use: {
     locale: 'ar-EG',
     timezoneId: 'Africa/Cairo',
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
+    storageState: 'e2e/.auth/state.json',
   },
 
   projects: [
@@ -47,18 +67,24 @@ export default defineConfig({
     },
   ],
 
+  // بناء إنتاجي ثم تشغيل — مش `dev` (شوف تعليق `workers` فوق لسبب القرار).
+  // `reuseExistingServer: true` يعني لو سيرفر شغّال بالفعل على المنفذ ده
+  // (من جولة سابقة في نفس الجلسة، أو `npm run start:admin` يدوي)، مفيش
+  // إعادة بناء — أول جولة بس بتاخد وقت البناء (~دقيقتين لكل تطبيق،
+  // بيحصلوا بالتوازي)، وبعدها كل تشغيل تاني فوري. مهلة أطول (٥ دقايق)
+  // عشان تستوعب وقت البناء نفسه مش بس بدء التشغيل.
   webServer: [
     {
-      command: 'npm run dev:admin',
+      command: 'npm run build:admin && npm run start:admin',
       url: 'http://localhost:3100',
       reuseExistingServer: true,
-      timeout: 180_000,
+      timeout: 300_000,
     },
     {
-      command: 'npm run dev:dealers',
+      command: 'npm run build:dealers && npm run start:dealers',
       url: 'http://localhost:3200',
       reuseExistingServer: true,
-      timeout: 180_000,
+      timeout: 300_000,
     },
   ],
 });

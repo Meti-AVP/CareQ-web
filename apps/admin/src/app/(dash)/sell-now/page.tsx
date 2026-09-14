@@ -32,6 +32,7 @@ import {
 } from '@carq/ui';
 import {
   errorMessage,
+  nowMs,
   useBreakdown,
   useFunnel,
   usePendingCount,
@@ -131,6 +132,10 @@ export default function SellNowQueuePage() {
   const [trail, setTrail] = useState<Array<string | null>>([]);
   const [offerFor, setOfferFor] = useState<SellNowRequest | null>(null);
   const [collectFor, setCollectFor] = useState<SellNowRequest | null>(null);
+
+  /** FND-036 — ثابتة على ساعة الموك المجمّدة عشان حساب SLA الـ٢٤ ساعة
+   * ما يتأثرش بمرور وقت التشغيل الفعلي. */
+  const now = new Date(nowMs());
 
   /** الـcursor بيتبع التبويب المفتوح بس — الباقي بيفضل على أول صفحة */
   const at = (key: TabKey) => (tab === key ? cursor : null);
@@ -355,15 +360,15 @@ export default function SellNowQueuePage() {
       header: 'مستني بقاله',
       align: 'end',
       sortable: true,
-      value: (r) => Math.round(hoursSince(r.createdAt)),
+      value: (r) => Math.round(hoursSince(r.createdAt, now)),
       render: (r) => {
-        const late = r.status === 'pending' && hoursSince(r.createdAt) > 24;
+        const late = r.status === 'pending' && hoursSince(r.createdAt, now) > 24;
         return (
           <span
             className={`tnum font-bold ${late ? 'text-crit' : 'text-content-sub'}`}
             title={late ? 'عدّى ٢٤ ساعة وهو مستني قرار' : undefined}
           >
-            {waitingFor(r.createdAt)}
+            {waitingFor(r.createdAt, now)}
           </span>
         );
       },
@@ -471,6 +476,7 @@ export default function SellNowQueuePage() {
         />
 
         <DataTable
+          caption="جدول طلبات بيع حالًا"
           rows={rows}
           columns={columns}
           rowKey={(r) => r.id}
@@ -479,7 +485,9 @@ export default function SellNowQueuePage() {
           onRetry={() => active.refetch()}
           emptyTitle={EMPTY[tab].title}
           emptyHint={EMPTY[tab].hint}
-          rowTone={(r) => (r.status === 'pending' && hoursSince(r.createdAt) > 24 ? 'crit' : undefined)}
+          rowTone={(r) =>
+            r.status === 'pending' && hoursSince(r.createdAt, now) > 24 ? 'crit' : undefined
+          }
           onRowClick={(r) => router.push(`/sell-now/${r.id}`)}
           searchable
           searchPlaceholder="دوّر باسم العربية أو البائع…"

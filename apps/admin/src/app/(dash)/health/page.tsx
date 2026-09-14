@@ -46,6 +46,7 @@ import {
 } from '@carq/ui';
 import {
   errorMessage,
+  nowMs,
   useAdminActivity,
   useHealth,
   useScanJobs,
@@ -125,6 +126,8 @@ const SERIES_ORDER: ScanJobStatus[] = ['done', 'running', 'queued', 'failed'];
 const DAYS_AR = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
 
 export default function HealthPage() {
+  /** FND-036 — ثابتة على ساعة الموك المجمّدة، مش الوقت الحقيقي. */
+  const now = new Date(nowMs());
   const [tab, setTab] = useState<ScanJobStatus>('queued');
 
   /** الصفحات بالـcursor — بيتصفّر مع تغيير التبويب */
@@ -338,7 +341,7 @@ export default function HealthPage() {
       value: (r) => r.createdAt,
       render: (r) => (
         <span className="text-content-sub" title={formatTimeAr(r.createdAt)}>
-          {relTimeAr(r.createdAt)}
+          {relTimeAr(r.createdAt, now)}
         </span>
       ),
     },
@@ -348,10 +351,10 @@ export default function HealthPage() {
       width: 120,
       align: 'center',
       hideBelow: 'md',
-      value: (r) => (r.status === 'queued' ? waitingFor(r.createdAt) : '—'),
+      value: (r) => (r.status === 'queued' ? waitingFor(r.createdAt, now) : '—'),
       render: (r) =>
         r.status === 'queued' ? (
-          <span className="tnum font-bold text-warn">{waitingFor(r.createdAt)}</span>
+          <span className="tnum font-bold text-warn">{waitingFor(r.createdAt, now)}</span>
         ) : (
           <span className="text-content-faint">—</span>
         ),
@@ -365,7 +368,7 @@ export default function HealthPage() {
         r.error ? (
           <span className="text-crit">{r.error}</span>
         ) : r.finishedAt ? (
-          <span className="text-content-faint">خلصت {relTimeAr(r.finishedAt)}</span>
+          <span className="text-content-faint">خلصت {relTimeAr(r.finishedAt, now)}</span>
         ) : (
           <span className="text-content-faint">لسه ماتنفذتش</span>
         ),
@@ -635,6 +638,7 @@ export default function HealthPage() {
         </div>
 
         <DataTable<ScanJob>
+          caption="جدول مهام فحص الصحة"
           rows={active.data?.items ?? []}
           columns={columns}
           rowKey={(r) => r.id}
@@ -676,7 +680,7 @@ export default function HealthPage() {
           </span>
           <span className="flex items-center gap-2">
             <Activity className="h-3.5 w-3.5 shrink-0" />
-            آخر فحص {h ? `${formatTimeAr(h.checkedAt)} · ${relTimeAr(h.checkedAt)}` : '—'}
+            آخر فحص {h ? `${formatTimeAr(h.checkedAt)} · ${relTimeAr(h.checkedAt, now)}` : '—'}
           </span>
         </div>
       </Sheet>

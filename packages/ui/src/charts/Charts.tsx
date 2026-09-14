@@ -18,7 +18,9 @@ import {
   XAxis,
   YAxis,
   ZAxis,
+  type TooltipProps,
 } from 'recharts';
+import type { NameType, ValueType } from 'recharts/types/component/DefaultTooltipContent';
 import { cn } from '../lib/cn';
 import { compactNumber, withThousands } from '../lib/format';
 import { BAR_RADIUS, chartVars, divergingColor, seriesColor, sequentialColor } from './theme';
@@ -66,17 +68,15 @@ function TipShell({ label, rows, unit }: { label?: string; rows: TipRow[]; unit?
 }
 
 function makeTooltip(unit?: string, labelFmt?: (l: string) => string) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return function CarqTooltip({ active, payload, label }: any) {
+  return function CarqTooltip({ active, payload, label }: TooltipProps<ValueType, NameType>) {
     if (!active || !payload?.length) return null;
     return (
       <TipShell
         label={labelFmt && label !== undefined ? labelFmt(String(label)) : label ? String(label) : undefined}
         unit={unit}
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        rows={payload.map((p: any) => ({
-          name: p.name ?? '',
-          value: p.value,
+        rows={payload.map((p) => ({
+          name: String(p.name ?? ''),
+          value: p.value as string | number,
           color: p.color ?? p.fill,
         }))}
       />
@@ -465,7 +465,10 @@ export function Funnel({ steps, className }: { steps: FunnelStep[]; className?: 
               <span className="tnum text-caption text-content-sub">
                 {withThousands(s.count)}
                 {i > 0 ? (
+                  // فاصل صريح (مش margin بس) — من غير كده الرقمين بيتلزقوا في أي
+                  // نسخ نص/screen reader (190 ثم 85% بيتقروا/بيتنسخوا "19085%")
                   <span className={cn('ms-2', fromPrev < 50 ? 'text-crit' : 'text-content-faint')}>
+                    {' · '}
                     {Math.round(fromPrev)}٪ من اللي قبلها
                   </span>
                 ) : null}
@@ -491,6 +494,8 @@ export function Funnel({ steps, className }: { steps: FunnelStep[]; className?: 
 }
 
 /* ═══════════════════════ ٧) نقاط مبعثرة ═══════════════════════ */
+
+type ScatterPoint = { x: number; y: number; group?: string; color?: string; label?: string };
 
 /** بيكشف الشواذ والإعلانات المشبوهة (C-09 السعر × العداد) */
 export function ScatterPlot({
@@ -537,10 +542,11 @@ export function ScatterPlot({
         <ZAxis range={[64, 64]} />
         <Tooltip
           cursor={{ strokeDasharray: '3 3', stroke: chartVars.axis }}
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          content={({ active, payload }: any) => {
+          content={({ active, payload }: TooltipProps<ValueType, NameType>) => {
             if (!active || !payload?.length) return null;
-            const p = payload[0].payload;
+            // recharts بتسيب شكل نقطة الداتا الأصلية `any` في تعريفها
+            // هي — دي نفس نقطة `points` اللي بعتناها أصلًا
+            const p = payload[0]?.payload as ScatterPoint;
             return (
               <TipShell
                 label={p.label}

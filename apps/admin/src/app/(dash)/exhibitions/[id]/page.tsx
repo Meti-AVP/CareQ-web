@@ -42,6 +42,7 @@ import {
 } from '@carq/ui';
 import {
   errorMessage,
+  nowMs,
   useAudit,
   useAuctionEntries,
   useAuctions,
@@ -94,7 +95,8 @@ const AUDIT_LABELS: Record<string, string> = {
   'auction.defaulted': 'تعليم مزاد متعثر',
 };
 
-const daysLeft = (endsAt: string) => Math.floor(secondsUntil(endsAt) / 86_400);
+/** FND-036 — ثابتة على ساعة الموك المجمّدة، مش الوقت الحقيقي. */
+const daysLeft = (endsAt: string) => Math.floor(secondsUntil(endsAt, new Date(nowMs())) / 86_400);
 
 /** صف بيانات: عنوان صغير وقيمة تحته — الشكل المتكرر في بطاقة الملف */
 function Row({ label, value, hint }: { label: string; value: string; hint?: string }) {
@@ -114,6 +116,8 @@ export default function ExhibitionDetailPage() {
 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [ownerPhone, setOwnerPhone] = useState<string | null>(null);
+  /** FND-036 — ثابتة على ساعة الموك المجمّدة، مش الوقت الحقيقي. */
+  const now = new Date(nowMs());
 
   const exhibition = useExhibition(id);
   const ex = exhibition.data;
@@ -218,7 +222,7 @@ export default function ExhibitionDetailPage() {
       value: (l) => l.publishedAt ?? '',
       render: (l) => (
         <span className="whitespace-nowrap text-content-sub">
-          {l.publishedAt ? relTimeAr(l.publishedAt) : 'مانشرش لسه'}
+          {l.publishedAt ? relTimeAr(l.publishedAt, now) : 'مانشرش لسه'}
         </span>
       ),
     },
@@ -512,7 +516,7 @@ export default function ExhibitionDetailPage() {
                 <Row
                   label="إجمالي النشاط"
                   value={`${withThousands(ex.bidsCount)} مزايدة · ${withThousands(ex.winsCount)} مكسب`}
-                  hint={ex.lastActiveAt ? `آخر نشاط ${relTimeAr(ex.lastActiveAt)}` : undefined}
+                  hint={ex.lastActiveAt ? `آخر نشاط ${relTimeAr(ex.lastActiveAt, now)}` : undefined}
                 />
 
                 <div className="mt-4">
@@ -545,6 +549,7 @@ export default function ExhibitionDetailPage() {
               }
             />
             <DataTable<Listing>
+              caption="جدول إعلانات المعرض"
               rows={listings.data?.items ?? []}
               columns={listingColumns}
               rowKey={(l) => l.id}
@@ -563,6 +568,7 @@ export default function ExhibitionDetailPage() {
               hint="كل مزايدة اتسجّلت باسم المعرض — المزايدات مابتتمسحش أبدًا (X-6)"
             />
             <DataTable<AuctionBid>
+              caption="جدول مزايدات المعرض"
               rows={bids.data ?? []}
               columns={bidColumns}
               rowKey={(b) => b.id}
@@ -592,6 +598,7 @@ export default function ExhibitionDetailPage() {
               }
             />
             <DataTable<AuditEntry>
+              caption="جدول سجل تدقيق المعرض"
               rows={audit.data?.items ?? []}
               columns={auditColumns}
               rowKey={(a) => a.id}
@@ -618,6 +625,10 @@ export default function ExhibitionDetailPage() {
         }
         confirmLabel={ex?.isContracted ? 'أوقف التعاقد' : 'امنح التعاقد'}
         tone={ex?.isContracted ? 'crit' : 'accent'}
+        // منح التعاقد بيفتح مسار مالي حقيقي (المزايدة بفلوس) — نفس
+        // مستوى تشدد ترقية الدور وتعليم المزاد المتعثر (FND-020).
+        // إيقاف التعاقد عكسي وأقل خطورة من فتح تدفق جديد، فمابنطلبوش.
+        typeToConfirm={ex?.isContracted ? undefined : 'تعاقد'}
         requireReason
         reasonLabel="سبب القرار"
         reasonHint="بيتسجّل في سجل التدقيق (exhibition.contract_changed) ومابيتمسحش"

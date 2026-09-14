@@ -43,6 +43,7 @@ import {
 } from '@carq/ui';
 import {
   errorMessage,
+  nowMs,
   useFinancingApp,
   useSetFinancingStatus,
   useSignedIdImage,
@@ -114,6 +115,8 @@ export default function FinancingDetailPage() {
   const id = String(params?.id ?? '');
   const router = useRouter();
   const toast = useToast();
+  /** FND-036 — ثابتة على ساعة الموك المجمّدة، مش الوقت الحقيقي. */
+  const now = new Date(nowMs());
 
   const app = useFinancingApp(id);
   const setStatus = useSetFinancingStatus();
@@ -163,7 +166,7 @@ export default function FinancingDetailPage() {
     );
   };
 
-  const late = data?.status === 'submitted' && hoursSince(data.createdAt) >= 24;
+  const late = data?.status === 'submitted' && hoursSince(data.createdAt, now) >= 24;
 
   return (
     <>
@@ -391,7 +394,7 @@ export default function FinancingDetailPage() {
                           late ? 'text-crit' : 'text-content-sub',
                         )}
                       >
-                        مستني بقاله {waitingFor(data.createdAt)}
+                        مستني بقاله {waitingFor(data.createdAt, now)}
                       </span>
                     ) : data.reviewedAt ? (
                       <span className="text-caption text-content-faint">

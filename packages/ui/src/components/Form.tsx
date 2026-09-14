@@ -239,19 +239,28 @@ export function FileDrop({
   hint,
   fileName,
   onPick,
+  onPickMultiple,
   accept = 'image/*,application/pdf',
   invalid,
   disabled,
   icon,
+  multiple,
+  directory,
 }: {
   label: string;
   hint?: string;
   fileName?: string | null;
-  onPick: (file: File) => void;
+  onPick?: (file: File) => void;
+  /** لو `multiple` أو `directory` مفعّلين — بترجع كل الملفات المختارة مرة واحدة */
+  onPickMultiple?: (files: File[]) => void;
   accept?: string;
   invalid?: boolean;
   disabled?: boolean;
   icon?: ReactNode;
+  /** اختيار عدة ملفات دفعة واحدة */
+  multiple?: boolean;
+  /** اختيار مجلد كامل (كل ملفاته) — بديل بدون مكتبة فك ضغط لـ«مجلد مضغوط» */
+  directory?: boolean;
 }) {
   const id = useId();
   const done = Boolean(fileName);
@@ -272,11 +281,16 @@ export function FileDrop({
         id={id}
         type="file"
         accept={accept}
+        multiple={multiple || directory}
+        // خاصية غير قياسية في React types — مدعومة في كل المتصفحات الحديثة
+        {...(directory ? { webkitdirectory: '' } : {})}
         className="sr-only"
         disabled={disabled}
         onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) onPick(f);
+          const list = e.target.files;
+          if (!list || list.length === 0) return;
+          if (multiple || directory) onPickMultiple?.(Array.from(list));
+          else onPick?.(list[0]!);
         }}
       />
       <span className={cn('[&>svg]:h-6 [&>svg]:w-6', done ? 'text-ok' : 'text-content-faint')}>

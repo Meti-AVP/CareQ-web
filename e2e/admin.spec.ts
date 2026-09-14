@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { ADMIN, expectCleanConsole, expectHeading, open, watchConsole } from './helpers';
+import { ADMIN, DEALERS, expectCleanConsole, expectHeading, open, watchConsole } from './helpers';
 
 /**
  * جولة المستخدم الحقيقي — لوحة الأدمن (16 شاشة)
@@ -9,6 +9,8 @@ import { ADMIN, expectCleanConsole, expectHeading, open, watchConsole } from './
  */
 
 test.describe('لوحة الأدمن — كل الشاشات بتفتح نضيفة', () => {
+  // /login مش هنا: زيارتها وإحنا داخلين بجلسة بترجّع لـ/ (المرحلة ٢) —
+  // شوف 'تسجيل الدخول من غير جلسة سابقة' تحت لاختبار /login فعليًا.
   for (const [path, name] of [
     ['/', 'النظرة العامة'],
     ['/listings', 'الإعلانات'],
@@ -20,7 +22,6 @@ test.describe('لوحة الأدمن — كل الشاشات بتفتح نضيف
     ['/financing', 'التمويل'],
     ['/audit', 'سجل التدقيق'],
     ['/health', 'صحة النظام'],
-    ['/login', 'الدخول'],
   ] as const) {
     test(`${name} (${path})`, async ({ page }) => {
       const errors = watchConsole(page);
@@ -138,6 +139,33 @@ test('المعارض: الفلاتر والترقيم وفتح ملف معرض',
   expectCleanConsole(errors);
 });
 
+test('منح التعاقد (المرحلة ٣ — FND-020) محتاج كتابة «تعاقد» للتأكيد، إيقافه لأ', async ({
+  page,
+}) => {
+  await open(page, ADMIN + '/exhibitions');
+  await page.locator('tr.cursor-pointer').first().locator('td').first().click();
+  await page.waitForURL(/\/exhibitions\/ex-/);
+
+  const toggleBtn = page.getByRole('button', { name: /امنح التعاقد|أوقف التعاقد/ }).first();
+  const willGrant = (await toggleBtn.textContent())?.includes('امنح');
+  await toggleBtn.click();
+
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  const confirmBtn = dialog.getByRole('button', { name: /امنح التعاقد|أوقف التعاقد/ });
+
+  if (willGrant) {
+    // منح التعاقد — بيفتح مسار مالي حقيقي، محتاج كتابة «تعاقد» بالحرف
+    await expect(dialog.getByText(/اكتب.*تعاقد.*للتأكيد/)).toBeVisible();
+    await expect(confirmBtn).toBeDisabled();
+    await dialog.getByRole('textbox').last().fill('تعاقد');
+  } else {
+    // إيقاف التعاقد — سبب + تأكيد الـdialog العادي كافيين، من غير كتابة كلمة
+    await expect(dialog.getByText(/اكتب.*للتأكيد/)).toHaveCount(0);
+  }
+  await expect(confirmBtn).toBeDisabled(); // لسه محتاج السبب الإجباري
+});
+
 test('بيع حالًا: فتح طلب من الجدول', async ({ page }) => {
   const errors = watchConsole(page);
   await open(page, ADMIN + '/sell-now');
@@ -172,6 +200,10 @@ test('صحة النظام: التبويبات بتقلب من غير أخطاء'
   expectCleanConsole(errors);
 });
 
+test.describe('تسجيل الدخول من غير جلسة سابقة (المرحلة ٢)', () => {
+  // نبدأ من غير أي كوكي — عكس باقي الملف اللي جلسته جاهزة من global-setup.ts
+  test.use({ storageState: { cookies: [], origins: [] } });
+
 test('الدخول: تحقق الرقم ثم كود OTP ثم الوصول للوحة', async ({ page }) => {
   const errors = watchConsole(page);
   await open(page, ADMIN + '/login');
@@ -198,3 +230,58 @@ test('الدخول: تحقق الرقم ثم كود OTP ثم الوصول للو
 
   expectCleanConsole(errors);
 });
+
+test('وصول مباشر لمسار محمي من غير جلسة بيرجّع لـ/login مع ?next=', async ({ page }) => {
+  await page.goto(ADMIN + '/listings');
+  await page.waitForURL(/\/login\?next=%2Flistings/);
+  await expect(page.getByRole('heading', { name: 'تسجيل الدخول' })).toBeVisible();
+});
+
+test('دخول برقم صاحب معرض حقيقي (دور غلط) بيترفض من غير ما يقول إن فيه لوحة أصلًا', async ({
+  page,
+}) => {
+  await open(page, ADMIN + '/login');
+  // 01246830664 = صاحب المعرض التجريبي (ex-1) في بيانات الموك —
+  // موجود فعليًا بس دوره exhibition مش admin (getMockIdentity في
+  // packages/api-client/src/mock/db.ts بترجع هويته الحقيقية بدل
+  // ADMIN_USER الافتراضية لما الرقم يتطابق مع مستخدم حقيقي)
+  await page.locator('input[type="tel"]').fill('01246830664');
+  await page.getByRole('button', { name: /ابعت كود/ }).click();
+  await expect(page.getByText('اكتب الكود')).toBeVisible();
+
+  const boxes = page.locator('input[inputmode="numeric"]');
+  for (let i = 0; i < 4; i++) await boxes.nth(i).fill(String(i + 1));
+  await page.getByRole('button', { name: /ادخل على اللوحة/ }).click();
+
+  // رسالة رفض عامة، من غير ما تفصح إن فيه دور "أدمن" أصلًا
+  await expect(page.getByText('الحساب ده مش مصرّح له')).toBeVisible();
+  await expect(page).toHaveURL(/\/login/);
+});
+
+test('جلسة أدمن (المرحلة ٣ — عزل التطبيقين) مش بتفتح بوابة المعارض في نفس المتصفح', async ({
+  page,
+}) => {
+  // دخول أدمن فعلي — نفس فلو الاختبار الأول في الملف ده
+  await open(page, ADMIN + '/login');
+  await page.locator('input[type="tel"]').fill('01001234567');
+  await page.getByRole('button', { name: /ابعت كود/ }).click();
+  await expect(page.getByText('اكتب الكود')).toBeVisible();
+  const boxes = page.locator('input[inputmode="numeric"]');
+  for (let i = 0; i < 4; i++) await boxes.nth(i).fill(String(i + 1));
+  await page.getByRole('button', { name: /ادخل على اللوحة/ }).click();
+  await page.waitForURL(ADMIN + '/');
+
+  // نفس المتصفح، بوابة المعارض — كوكي الجلسة اسمها مختلف
+  // (cq_session_admin مش cq_session_dealers)، فمفروض middleware.ts
+  // هناك يرفض الوصول تمامًا (FND-016 من المرحلة ٢ — قبل الإصلاح كانت
+  // الكوكي بتتشارك بين اللوحتين محليًا)
+  await page.goto(DEALERS + '/inventory');
+  await page.waitForURL(/\/login\?next=%2Finventory/);
+  await expect(page.getByRole('heading', { name: 'دخول المعرض' })).toBeVisible();
+
+  // apply يفضل مسار عام برضه — مفيش تسريب ولا منع خاطئ
+  await page.goto(DEALERS + '/apply');
+  await expect(page.getByRole('heading', { name: 'قدّم كمعرض' })).toBeVisible();
+});
+
+}); // تسجيل الدخول من غير جلسة سابقة

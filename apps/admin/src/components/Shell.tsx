@@ -1,23 +1,25 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import {
   Activity,
+  AlertTriangle,
   Banknote,
   Building2,
   ClipboardList,
   Gavel,
   LayoutDashboard,
+  LogOut,
   Menu,
   ScrollText,
   Users,
   X,
   Zap,
 } from 'lucide-react';
-import { cn, StrokeMotif, Monogram, palette } from '@carq/ui';
-import { usePendingCount, useHealth } from '@carq/api-client';
+import { cn, StrokeMotif, Monogram, palette, Banner, Button, SessionLoading, SessionExpired } from '@carq/ui';
+import { usePendingCount, useHealth, useSession, DEMO_MODE } from '@carq/api-client';
 
 /**
  * ════════════════════════════════════════════════════════════════
@@ -71,11 +73,22 @@ const NAV: Array<{ section?: string; items: NavItem[] }> = [
   },
 ];
 
+/** أول حرفين من الاسم — بديل «مص» المكتوب بالإيد */
+function initials(name: string | undefined): string {
+  if (!name) return 'مد';
+  const clean = name.replace(/—.*/, '').trim();
+  return clean.slice(0, 2) || 'مد';
+}
+
 export function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const [open, setOpen] = useState(false);
+  const { status, user, logout } = useSession();
   const { data: pending } = usePendingCount();
   const { data: health } = useHealth();
+  const overdue = health?.overdueAuctions ?? 0;
+  const workerDown = health ? !health.workerAlive : false;
 
   // الدرج المفتوح على الموبايل بيقفل سكرول الصفحة اللي وراه
   useEffect(() => {
@@ -96,6 +109,13 @@ export function Shell({ children }: { children: React.ReactNode }) {
       return health && health.overdueAuctions > 0 ? health.overdueAuctions : null;
     return null;
   };
+
+  /* حالة تحميل الجلسة — قبل ما نعرف مين الداخل (المرحلة ٢) */
+  if (status === 'loading') return <SessionLoading />;
+  /* انتهت الجلسة أثناء الاستخدام — شاشة واضحة، مش إعادة توجيه صامتة */
+  if (status === 'expired') return <SessionExpired onRelogin={logout} />;
+  /* مفيش جلسة صالحة — SessionProvider بيتولى التحويل لـ/login بالفعل */
+  if (status === 'unauthenticated') return null;
 
   return (
     <div className="flex min-h-screen">
@@ -179,11 +199,20 @@ export function Shell({ children }: { children: React.ReactNode }) {
         </nav>
 
         <div className="relative z-10 flex items-center gap-3 border-t border-white/10 px-5 py-4">
-          <Monogram text="مص" size={36} dark className="!bg-white/12 !text-white" />
+          <Monogram text={initials(user?.name)} size={36} dark className="!bg-white/12 !text-white" />
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sub font-bold text-white">مصطفى</p>
+            <p className="truncate text-sub font-bold text-white">{user?.name ?? '—'}</p>
             <p className="text-caption text-white/45">مالك CarQ</p>
           </div>
+          <button
+            type="button"
+            onClick={() => void logout()}
+            aria-label="تسجيل الخروج"
+            title="تسجيل الخروج"
+            className="shrink-0 rounded-full p-2 text-white/50 transition-colors hover:bg-white/10 hover:text-white"
+          >
+            <LogOut className="h-[18px] w-[18px]" />
+          </button>
         </div>
       </aside>
 
@@ -207,6 +236,40 @@ export function Shell({ children }: { children: React.ReactNode }) {
           <Menu className="h-5 w-5" />
           <span className="text-sub font-bold">CarQ</span>
         </button>
+        {DEMO_MODE ? (
+          <Banner
+            tone="warn"
+            title="وضع تجريبي"
+            className="rounded-none border-x-0 border-t-0"
+          >
+            بيانات وهمية ودخول ديمو — مفيش باك اند متوصّل لسه.
+          </Banner>
+        ) : null}
+        {/*
+          بانر عالمي — مزادات متأخرة عن القفل/العامل الخلفي واقف، في كل
+          الصفحات (§4.8) — كان قبل كده بانر محلي في "/" بس (FND-038).
+          مخفي في "/" لأن الصفحة دي عندها نفس البانر بالظبط بتفاصيل
+          إضافية (زرار "افتح لوحة الصحة" وسياق أوسع).
+        */}
+        {pathname !== '/' && (workerDown || overdue > 0) ? (
+          <Banner
+            tone="crit"
+            icon={<AlertTriangle />}
+            title={
+              overdue > 0
+                ? `${overdue} مزاد متأخر عن القفل — العامل الخلفي واقف`
+                : 'العامل الخلفي واقف'
+            }
+            action={
+              <Button variant="danger" size="sm" onClick={() => router.push('/health')}>
+                افتح لوحة الصحة
+              </Button>
+            }
+            className="rounded-none border-x-0 border-t-0"
+          >
+            المزادات مابتتقفلش لوحدها وقت ما `ends_at` يعدّي، وتحليل صور السكان واقف في الطابور.
+          </Banner>
+        ) : null}
         <main className="min-w-0 flex-1">{children}</main>
       </div>
     </div>

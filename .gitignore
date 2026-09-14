@@ -12,9 +12,13 @@ next-env.d.ts
 .vercel
 .turbo
 
-# مخرجات الاختبارات — بتتولد من npm run e2e
+# مخرجات الاختبارات — بتتولد من npm run e2e / npm run e2e:realtime
 e2e/test-results/
+e2e/test-results-realtime/
 e2e/report/
 e2e/screenshots/
 playwright-report/
 test-results/
+
+# كوكي جلسة الاختبار (المرحلة ٢) — بتتولد من global-setup.ts، سرّية بالتصميم
+e2e/.auth/

@@ -36,6 +36,8 @@ import {
   Textarea,
   useToast,
   withThousands,
+  validateFile,
+  ACCEPTED_DOCUMENT_TYPES,
 } from '@carq/ui';
 import { useCatalog } from '@carq/api-client';
 import { isEgyptianPhone } from '@/lib/catalog';
@@ -107,7 +109,7 @@ export default function ApplyPage() {
         ? 'اسم المعرض لازم يكون من ٣ لـ ١٦٠ حرف'
         : undefined,
     ownerName: ownerName.trim().length < 3 ? 'اكتب اسم المالك زي ما هو في البطاقة' : undefined,
-    phone: isEgyptianPhone(phone) ? undefined : 'رقم مصري: موبايل (010/011/012/015) أو أرضي',
+    phone: isEgyptianPhone(phone) ? undefined : 'رقم موبايل مصري صحيح (010/011/012/015)',
     governorate: governorate ? undefined : 'اختار المحافظة',
     area: area.trim() ? undefined : 'اكتب أو اختار المنطقة',
     address: address.trim().length < 10 ? 'اكتب العنوان بالتفصيل — الشارع والعلامة المميزة' : undefined,
@@ -124,8 +126,9 @@ export default function ApplyPage() {
     venueCount >= VENUE_MIN;
 
   const pickDoc = (kind: DocKind, file: File) => {
-    if (file.size > MAX_BYTES) {
-      setDocErrors((p) => ({ ...p, [kind]: 'الملف أكبر من ١٠ ميجا — صغّره وارفعه تاني' }));
+    const error = validateFile(file, { maxBytes: MAX_BYTES, acceptedTypes: ACCEPTED_DOCUMENT_TYPES });
+    if (error) {
+      setDocErrors((p) => ({ ...p, [kind]: error }));
       return;
     }
     setDocErrors((p) => ({ ...p, [kind]: undefined }));
@@ -133,8 +136,9 @@ export default function ApplyPage() {
   };
 
   const pickVenue = (i: number, file: File) => {
-    if (file.size > MAX_BYTES) {
-      setDocErrors((p) => ({ ...p, [`venue-${i}`]: 'الملف أكبر من ١٠ ميجا' }));
+    const error = validateFile(file, { maxBytes: MAX_BYTES, acceptedTypes: ACCEPTED_DOCUMENT_TYPES });
+    if (error) {
+      setDocErrors((p) => ({ ...p, [`venue-${i}`]: error }));
       return;
     }
     setDocErrors((p) => ({ ...p, [`venue-${i}`]: undefined }));
@@ -321,7 +325,7 @@ export default function ApplyPage() {
                       label="تليفون المعرض"
                       required
                       error={touched ? errors.phone : undefined}
-                      hint="موبايل مصري أو أرضي — ده الرقم اللي بنكلّمك عليه"
+                      hint="رقم موبايل مصري — ده الرقم اللي بنكلّمك عليه"
                     >
                       <Input
                         value={phone}

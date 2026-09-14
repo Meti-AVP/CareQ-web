@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import {
@@ -59,7 +60,11 @@ import {
   useMyEntries,
   useMyExhibition,
   usePlaceBid,
+  useRealtime,
+  type Auction,
   type AuctionBid,
+  type AuctionEndedData,
+  type AuctionExtendedData,
   type ErrorCode,
 } from '@carq/api-client';
 
@@ -72,13 +77,14 @@ import {
  *  ١) **الواجهة مابتخترعش رقم ولا وقت.** الزرار بيبعت `auction.nextBid`
  *     زي ما السيرفر رجّعه بالظبط — ممنوع `currentBid + bidStep`،
  *     و`bidStep` عمود في الداتابيز مش ثابت في الكود (A-3).
- *  ٢) **الحالة بتتقرا REST عند كل فتح** قبل أي تحديث حي: الـhooks
- *     بتعمل fetch أول ما الصفحة تفتح وبعدين polling (staleTime: 0).
- *     الـpolling ده **بديل مؤقت للـWebSocket في المرحلة ١** — الخطوة
- *     الجاية هي الاشتراك في topic `auction:{id}` بالبروتوكول الموصوف
- *     في §4.5: `auth` ثم `subscribe` بـ`since: lastEventId`، والأحداث
- *     `bid.placed` · `auction.extended` · `auction.ended`. لما يتركّب،
- *     الـREST بيفضل هو البداية والـWS بيكمّل مش بيبدأ.
+ *  ٢) **الحالة بتتقرا REST عند كل فتح** قبل أي اشتراك حي (`staleTime: 0`
+ *     يضمن مفيش كاش قديم). بعد كده `useRealtime('auction:{id}')`
+ *     (المرحلة ٦) بتكمّل — الاشتراك في topic `auction:{id}` بالبروتوكول
+ *     الموصوف في §4.5: `auth` ثم `subscribe` بـ`since: lastEventId`،
+ *     والأحداث `bid.placed` · `auction.extended` · `auction.ended`.
+ *     الـWS بيكمّل مش بيبدأ — REST دايمًا الأول. **مفيش إعادة اتصال
+ *     تلقائي** لو السوكت اتقطع (§4.5 بند ٢) — بانر + زرار تحديث بيسحب
+ *     REST تاني، مش polling صامت.
  *  ٣) **التمديد بيتعرض صراحة.** عداد بيقفز من غير تفسير بيبان باج،
  *     فإحنا بنراقب `endsAt` و`extensionCount` وبنقول «المزاد اتمدّ».
  *  ٤) **قطع الاتصال بيتقال.** مزايد شايف رقم بايت هيخسر فلوس.
@@ -99,14 +105,51 @@ export default function AuctionRoomPage() {
   const auctionId = String(params?.id ?? '');
   const router = useRouter();
   const toast = useToast();
+  const qc = useQueryClient();
 
-  // القراءة REST الأول — والـpolling بديل الـWS في المرحلة ١ (§4.5 بند ١)
+  // القراءة REST الأول (§4.5 بند ١) — الـWS بيكمّل بعد كده، مش بيبدأ
   const auctionQ = useDealerAuction(auctionId);
   const bidsQ = useDealerBids(auctionId);
   const exhibitionQ = useMyExhibition();
   const entriesQ = useMyEntries();
   const placeBid = usePlaceBid();
   const createEntry = useCreateEntry();
+
+  /*
+   * ─────────── الاتصال الحي: `auction:{id}` (§4.5) ───────────
+   * الأحداث مبنية على شكل موصوف بالحرف في المواصفة — بنعتمد بس على
+   * الحقول الموثّقة فيها (`endsAt`/`status`)، وبنسحب REST تاني لأي
+   * حقل تاني (`currentBid`/`nextBid`/`winnerBidId`) بدل ما نخترعه
+   * محليًا (A-0/A-3: السيرفر هو اللي بيقرر، مش الواجهة).
+   */
+  const realtime = useRealtime(auctionId ? `auction:${auctionId}` : null, (frame) => {
+    switch (frame.type) {
+      case 'bid.placed':
+        // مزايدتي بترجعلي كحدث برضه (§4.5 بند ٤) — الـrefetch هنا
+        // بيجيب نفس الحالة الصحيحة، مش إضافة تانية فوق التفاؤلي
+        void auctionQ.refetch();
+        void bidsQ.refetch();
+        return;
+      case 'auction.extended': {
+        const data = frame.data as AuctionExtendedData;
+        qc.setQueryData<Auction>(['dealer', 'auctions', 'one', auctionId], (old) =>
+          old ? { ...old, endsAt: data.endsAt, extensionCount: old.extensionCount + 1 } : old,
+        );
+        return;
+      }
+      case 'auction.ended': {
+        const data = frame.data as AuctionEndedData;
+        qc.setQueryData<Auction>(['dealer', 'auctions', 'one', auctionId], (old) =>
+          old ? { ...old, status: data.status as Auction['status'] } : old,
+        );
+        // winnerBidId مش في حمولة الحدث — سحبة REST واحدة تجيبه (A-8: الووركر قفل، مش الشاشة)
+        void auctionQ.refetch();
+        return;
+      }
+      default:
+        return;
+    }
+  });
 
   const auction = auctionQ.data;
   const exhibition = exhibitionQ.data;
@@ -462,8 +505,13 @@ export default function AuctionRoomPage() {
       />
 
       <Sheet>
-        {/* قطع الاتصال: بانر + سحب REST تاني. الرقم البايت بيخسّر فلوس (§4.5 بند ٢) */}
-        {auctionQ.isError || bidsQ.isError ? (
+        {/*
+          قطع الاتصال: بانر + سحب REST تاني — **مفيش إعادة اتصال تلقائي**
+          جوه الغرفة (§4.5 بند ٢). بيظهر لو REST فشل (`isError`) أو
+          السوكت نفسه اتقطع (`realtime.status === 'disconnected'`) —
+          الحالتين ممكن يحصلوا مستقل عن بعض. الرقم البايت بيخسّر فلوس.
+        */}
+        {auctionQ.isError || bidsQ.isError || realtime.status === 'disconnected' ? (
           <Banner
             tone="crit"
             icon={<WifiOff />}
@@ -853,6 +901,7 @@ export default function AuctionRoomPage() {
           className="mt-8"
         />
         <DataTable
+          caption="جدول المزايدات"
           rows={bids}
           columns={bidColumns}
           rowKey={(b) => b.id}

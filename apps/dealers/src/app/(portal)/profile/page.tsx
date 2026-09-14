@@ -35,6 +35,8 @@ import {
   Textarea,
   useToast,
   withThousands,
+  validateFile,
+  ACCEPTED_IMAGE_TYPES,
 } from '@carq/ui';
 import { errorMessage, useCatalog, useMyExhibition, useUpdateMyExhibition } from '@carq/api-client';
 
@@ -66,6 +68,15 @@ export default function ProfilePage() {
   const [inspectionService, setInspectionService] = useState(false);
   const [logoName, setLogoName] = useState<string | null>(null);
   const [covers, setCovers] = useState<Array<string | null>>([null, null, null]);
+
+  const pickProfileImage = (file: File, onOk: (name: string) => void) => {
+    const error = validateFile(file, { acceptedTypes: ACCEPTED_IMAGE_TYPES });
+    if (error) {
+      toast({ tone: 'crit', title: 'الصورة مرفوضة', body: error });
+      return;
+    }
+    onOk(file.name);
+  };
 
   useEffect(() => {
     if (!ex) return;
@@ -290,7 +301,7 @@ export default function ProfilePage() {
                       accept="image/*"
                       icon={<ImageIcon />}
                       fileName={logoName}
-                      onPick={(f) => setLogoName(f.name)}
+                      onPick={(f) => pickProfileImage(f, setLogoName)}
                     />
                     {COVER_SLOTS.map((slot, i) => (
                       <FileDrop
@@ -301,7 +312,9 @@ export default function ProfilePage() {
                         icon={<Camera />}
                         fileName={covers[i]}
                         onPick={(f) =>
-                          setCovers((prev) => prev.map((c, k) => (k === i ? f.name : c)))
+                          pickProfileImage(f, (name) =>
+                            setCovers((prev) => prev.map((c, k) => (k === i ? name : c))),
+                          )
                         }
                       />
                     ))}

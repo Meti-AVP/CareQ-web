@@ -15,29 +15,38 @@
     "build": "npm run build --workspace=@carq/admin && npm run build --workspace=@carq/dealers",
     "build:admin": "npm run build --workspace=@carq/admin",
     "build:dealers": "npm run build --workspace=@carq/dealers",
+    "preview:admin": "npm run build:admin && npm run start:admin",
+    "preview:dealers": "npm run build:dealers && npm run start:dealers",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "test": "vitest run",
     "test:watch": "vitest",
     "checks": "node scripts/static-checks.mjs",
+    "mock-backend": "node scripts/mock-backend.mjs",
     "verify": "node scripts/verify.mjs",
     "e2e": "playwright test",
-    "e2e:report": "playwright show-report e2e/report"
+    "e2e:report": "playwright show-report e2e/report",
+    "e2e:realtime": "playwright test --config=playwright.realtime.config.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
     "@types/node": "^22.10.5",
     "@types/react": "^19.0.7",
     "@types/react-dom": "^19.0.3",
+    "@types/ws": "^8.18.1",
     "autoprefixer": "^10.4.20",
     "eslint": "^8.57.1",
     "eslint-config-next": "^15.5.25",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.3",
-    "vitest": "^2.1.9"
+    "vitest": "^2.1.9",
+    "ws": "^8.21.3"
   },
   "engines": {
     "node": ">=20"
+  },
+  "overrides": {
+    "postcss": "^8.4.49"
   }
 }

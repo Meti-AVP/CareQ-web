@@ -13,6 +13,7 @@ import { AlertTriangle, CheckCircle2, Info, X } from 'lucide-react';
 import { cn } from '../lib/cn';
 import { formatCountdown } from '../lib/format';
 import { secondsUntil } from '../lib/date';
+import { Button } from './Button';
 
 /* ═══════════════════════ التبويبات ═══════════════════════ */
 
@@ -217,4 +218,52 @@ export function useToast() {
   const ctx = useContext(ToastCtx);
   if (!ctx) throw new Error('useToast لازم يكون جوه ToastProvider');
   return ctx.toast;
+}
+
+/* ═══════════════════════ حالات الجلسة (المرحلة ٢) ═══════════════════════ */
+
+/** بين ما الصفحة تفتح ولحد ما نتأكد مين الداخل (التجديد الصامت) */
+export function SessionLoading({ className }: { className?: string }) {
+  return (
+    <div className={cn('flex min-h-screen flex-1 items-center justify-center bg-canvas', className)}>
+      <div className="flex flex-col items-center gap-3">
+        <span
+          aria-hidden="true"
+          className="h-8 w-8 animate-spin rounded-full border-2 border-line border-t-accent"
+        />
+        <p className="text-sub font-bold text-content-sub">جاري التحقق من جلستك…</p>
+      </div>
+    </div>
+  );
+}
+
+/** انتهت الجلسة أثناء الاستخدام (401 نهائي) — شاشة واضحة مش إعادة توجيه صامتة */
+export function SessionExpired({
+  onRelogin,
+  className,
+}: {
+  onRelogin: () => void;
+  className?: string;
+}) {
+  return (
+    <div
+      className={cn(
+        'flex min-h-screen flex-1 items-center justify-center bg-canvas px-6',
+        className,
+      )}
+    >
+      <div className="w-full max-w-sm animate-rise rounded-xl border border-line bg-surface p-7 text-center shadow-float">
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-warn-soft text-warn">
+          <AlertTriangle className="h-5 w-5" />
+        </div>
+        <p className="text-h2 text-content">انتهت الجلسة</p>
+        <p className="mt-2 text-body text-content-sub">
+          لدواعي الأمان، الجلسة بتنتهي بعد فترة من عدم النشاط. سجّل دخولك تاني عشان تكمّل.
+        </p>
+        <Button size="lg" className="mt-6 w-full" onClick={onRelogin}>
+          سجّل دخول تاني
+        </Button>
+      </div>
+    </div>
+  );
 }

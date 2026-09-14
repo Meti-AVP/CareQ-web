@@ -465,6 +465,7 @@ export default function InventoryPage() {
         ) : null}
 
         <DataTable
+          caption="جدول المخزون"
           rows={rows}
           columns={columns}
           rowKey={(l) => l.id}

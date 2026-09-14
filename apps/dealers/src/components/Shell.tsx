@@ -9,14 +9,15 @@ import {
   FileSignature,
   Gavel,
   LayoutDashboard,
+  LogOut,
   Menu,
   MessagesSquare,
   Store,
   Trophy,
   X,
 } from 'lucide-react';
-import { cn, Monogram, StrokeMotif, palette } from '@carq/ui';
-import { useMyExhibition, useMyEntries, useMyLeads } from '@carq/api-client';
+import { cn, Monogram, StrokeMotif, palette, Banner, SessionLoading, SessionExpired } from '@carq/ui';
+import { useMyExhibition, useMyEntries, useMyLeads, useSession, DEMO_MODE } from '@carq/api-client';
 
 /**
  * هيكل بوابة المعارض — نفس هيكل داشبورد الأدمن بالظبط
@@ -57,6 +58,7 @@ const NAV = [
 export function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+  const { status, logout } = useSession();
   const { data: exhibition } = useMyExhibition();
   const { data: entries } = useMyEntries();
   const { data: leads } = useMyLeads();
@@ -82,6 +84,13 @@ export function Shell({ children }: { children: React.ReactNode }) {
     if (href === '/leads') return unread || null;
     return null;
   };
+
+  /* حالة تحميل الجلسة — قبل ما نعرف مين الداخل (المرحلة ٢) */
+  if (status === 'loading') return <SessionLoading />;
+  /* انتهت الجلسة أثناء الاستخدام — شاشة واضحة، مش إعادة توجيه صامتة */
+  if (status === 'expired') return <SessionExpired onRelogin={logout} />;
+  /* مفيش جلسة صالحة — SessionProvider بيتولى التحويل لـ/login بالفعل */
+  if (status === 'unauthenticated') return null;
 
   return (
     <div className="flex min-h-screen">
@@ -196,6 +205,15 @@ export function Shell({ children }: { children: React.ReactNode }) {
             </p>
             <p className="text-caption text-white/45">{exhibition?.governorate ?? ''}</p>
           </div>
+          <button
+            type="button"
+            onClick={() => void logout()}
+            aria-label="تسجيل الخروج"
+            title="تسجيل الخروج"
+            className="shrink-0 rounded-full p-2 text-white/50 transition-colors hover:bg-white/10 hover:text-white"
+          >
+            <LogOut className="h-[18px] w-[18px]" />
+          </button>
         </div>
       </aside>
 
@@ -218,6 +236,15 @@ export function Shell({ children }: { children: React.ReactNode }) {
           <Menu className="h-5 w-5" />
           <span className="text-sub font-bold">CarQ</span>
         </button>
+        {DEMO_MODE ? (
+          <Banner
+            tone="warn"
+            title="وضع تجريبي"
+            className="rounded-none border-x-0 border-t-0"
+          >
+            بيانات وهمية ودخول ديمو — مفيش باك اند متوصّل لسه.
+          </Banner>
+        ) : null}
         <main className="min-w-0 flex-1">{children}</main>
       </div>
     </div>

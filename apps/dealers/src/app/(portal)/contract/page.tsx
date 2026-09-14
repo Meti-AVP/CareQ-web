@@ -30,7 +30,7 @@ import {
   secondsUntil,
   withThousands,
 } from '@carq/ui';
-import { errorMessage, useMyEntries, useMyExhibition } from '@carq/api-client';
+import { errorMessage, nowMs, useMyEntries, useMyExhibition } from '@carq/api-client';
 
 /**
  * ════════════════════════════════════════════════════════════════
@@ -90,7 +90,11 @@ export default function ContractPage() {
   const paidEntries = (entries.data ?? []).filter((e) => e.paidAt !== null);
   const pendingEntries = (entries.data ?? []).filter((e) => e.paidAt === null);
 
-  const secondsLeft = ex?.contractEndsAt ? secondsUntil(ex.contractEndsAt) : null;
+  /** FND-036 — ثابتة على ساعة الموك المجمّدة عشان أيام العقد المتبقية
+   * ما تتغيّرش بصمت بمرور وقت التشغيل الفعلي. */
+  const secondsLeft = ex?.contractEndsAt
+    ? secondsUntil(ex.contractEndsAt, new Date(nowMs()))
+    : null;
   const daysLeft = secondsLeft === null ? null : Math.ceil(secondsLeft / DAY_SECONDS);
   const expired = ex?.contractEndsAt ? secondsLeft === 0 : false;
   const contractLive = Boolean(ex?.isContracted) && !expired;

@@ -83,7 +83,12 @@ CMD ["npm", "run", "start", "--workspace=@carq/admin"]
       مش `localStorage`. (الـaccess token في الذاكرة بالفعل.)
 - [ ] `admin` **مستبعد من محركات البحث** — `robots: noindex` موجود في
       `layout.tsx`، وأضف `X-Robots-Tag` على مستوى الاستضافة كمان.
-- [ ] HTTPS إجباري + HSTS.
+- [ ] HTTPS إجباري + HSTS. **ملاحظة:** هيدرات HSTS و`upgrade-insecure-requests`
+      (`security-headers.mjs`) مشروطة بـ`isHttpsDeployment` — بتتفعّل
+      تلقائي على Vercel (`VERCEL=1`)، وعلى أي استضافة تانية لازم تحطّوا
+      `FORCE_HTTPS_HEADERS=true` صراحة **بس لو فعلًا وراها TLS حقيقي**
+      (غير كده أي طلب تالٍ للأصل بيفشل بـ`ERR_SSL_PROTOCOL_ERROR` —
+      تفاصيل `reports/PHASE-5-BACKEND-READINESS.md`).
 - [ ] CSP: ممنوع `unsafe-eval`، وحصر `img-src` على نطاق التخزين بتاعك.
 - [ ] **الروابط الموقّعة لصور البطاقة عمرها ٥ دقايق فعلًا** على السيرفر —
       الواجهة بتعرض عداد، بس السيرفر هو اللي بيفرض.
